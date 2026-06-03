@@ -10,14 +10,17 @@ UUID across all stages.
   → `stickers/<pack>/<uuid>.<ext>` and `stickers/meta.sqlite`. Idempotent on
   `file_unique_id`. See `README.md`.
 
-## Remaining
+- **Captioner** (`captioner` + `core`/`infra`). Offline batch over thumbnails via a
+  local VLM on Ollama (`qwen3-vl:32b`, validated incl. verbatim Cyrillic OCR).
+  Structured JSON → `scene`, `on_image_text` (OCR), `tone`, `situations`. New
+  `CaptionGateway` port + `OllamaCaptionGateway` adapter; `captions`/`prompts`
+  tables in the same SQLite store. Captions keyed by `(sticker_id, model,
+  prompt_version)` so models/prompts coexist for comparison; idempotent skip
+  checked *before* the model call; live per-sticker progress. Subcommands:
+  `run`, `stats`, `list`, `search`, `show`, `gallery` (static HTML),
+  `serve` (review server: filter by pack, sort by date), `prompts`. See `README.md`.
 
-### Captioner
-- **Target:** a retrieval-optimized text per sticker — literal scene, verbatim
-  on-image text (OCR), emotional tone, and the situations it's sent in.
-- **Solution:** offline batch over the thumbnails via a local VLM (Ollama HTTP;
-  `qwen2.5-vl` for OCR). Structured JSON prompt; persist a `captions` row keyed by
-  sticker UUID. New `core` port + `infra` adapter; reuse the SQLite store.
+## Remaining
 
 ### Embedder
 - **Target:** vectors that make query text and stickers comparable.
@@ -39,6 +42,18 @@ UUID across all stages.
 
 ## Open questions
 
-- Thumbnail (~320px) quality sufficient for embeddings, or render originals?
-- Local VLM strong enough on memes/OCR, or fall back to a cloud VLM for captioning?
+- Thumbnail quality sufficient for embeddings, or render originals? (Captioning
+  works well at thumbnail res — OCR reads stylized Cyrillic on 128–320px images.)
 - Caption embeddings alone, or hybrid with CLIP image vectors?
+
+## Resolved / notes
+
+- **Local VLM strong enough on memes/OCR?** Yes for `qwen3-vl:32b` — verbatim
+  Cyrillic OCR incl. deliberately-misspelled text, useful scene/tone/situations.
+  No cloud fallback needed for captioning.
+- **Don't ask the VLM to identify people/brands.** It hallucinates confidently
+  (named Oleg Tinkov as "Ilya Mikhaylov" at 80% confidence). Keep captions
+  descriptive; if identity search is ever needed, add deterministic manual tags.
+- **Model swaps** are a one-liner (`--model`) and coexist in the `captions` table.
+  Watch **Gemma 4 12B** (encoder-free, multilingual OCR) once Ollama ships its
+  vision support — currently Ollama's Gemma 4 build is text-only.

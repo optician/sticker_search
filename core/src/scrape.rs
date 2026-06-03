@@ -265,6 +265,9 @@ mod tests {
             }
             Ok(())
         }
+        fn list_stickers(&self, _pack: Option<&str>) -> Result<Vec<Sticker>, RepoError> {
+            Ok(self.stickers.borrow().clone())
+        }
     }
 
     #[derive(Default)]
@@ -286,6 +289,9 @@ mod tests {
             let path = format!("{pack}/{file_name}");
             self.existing.borrow_mut().insert(path.clone());
             Ok(path)
+        }
+        fn read(&self, _image_path: &str) -> Result<Vec<u8>, StoreError> {
+            unreachable!("scraper never reads images")
         }
     }
 

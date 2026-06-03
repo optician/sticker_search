@@ -94,3 +94,54 @@ pub struct FileData {
     pub bytes: Vec<u8>,
     pub ext: String,
 }
+
+/// The parsed caption a `CaptionGateway` returns for one image, before the
+/// use-case attaches the sticker key, model, prompt version, and timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptionFields {
+    /// Literal scene description.
+    pub scene: String,
+    /// Verbatim on-image text (OCR); empty string when the image has none.
+    #[serde(default)]
+    pub on_image_text: String,
+    /// Emotional tone.
+    pub tone: String,
+    /// Situations someone would send this sticker in.
+    #[serde(default)]
+    pub situations: Vec<String>,
+}
+
+/// What a `CaptionGateway` returns: the parsed fields plus the model's raw JSON
+/// (persisted as `Caption::raw` for debugging / reprocessing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptionResult {
+    pub fields: CaptionFields,
+    pub raw: String,
+}
+
+/// A persisted caption, keyed by `(sticker_id, model, prompt_version)` so model
+/// picks and prompt iterations coexist rather than overwriting each other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Caption {
+    pub sticker_id: Uuid,
+    pub model: String,
+    pub prompt_version: String,
+    pub scene: String,
+    pub on_image_text: String,
+    pub tone: String,
+    pub situations: Vec<String>,
+    /// The model's raw JSON response, kept for debugging / reprocessing.
+    pub raw: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// A captioning prompt, stored once per version. The integrity guard in the
+/// use-case ensures a `version` string maps to exactly one `text`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prompt {
+    pub version: String,
+    pub text: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}

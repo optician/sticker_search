@@ -30,6 +30,10 @@ impl ImageStore for FsImageStore {
         std::fs::write(dir.join(file_name), bytes).map_err(io)?;
         Ok(format!("{pack}/{file_name}"))
     }
+
+    fn read(&self, image_path: &str) -> Result<Vec<u8>, StoreError> {
+        std::fs::read(self.root.join(image_path)).map_err(io)
+    }
 }
 
 #[cfg(test)]
@@ -46,6 +50,18 @@ mod tests {
         assert_eq!(rel, "packA/a.webp");
         assert!(store.exists("packA", "a.webp"));
         assert_eq!(std::fs::read(tmp.join("packA/a.webp")).unwrap(), b"bytes");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn reads_back_by_relative_path() {
+        let tmp = std::env::temp_dir().join(format!("stickers-read-test-{}", std::process::id()));
+        let store = FsImageStore::new(&tmp);
+
+        let rel = store.save("packA", "a.webp", b"payload").unwrap();
+        assert_eq!(store.read(&rel).unwrap(), b"payload");
+        assert!(store.read("packA/missing.webp").is_err());
 
         std::fs::remove_dir_all(&tmp).ok();
     }
