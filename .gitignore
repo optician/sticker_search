@@ -6,3 +6,5 @@ docs/superpowers/
 /packs.txt
 # generated caption gallery
 /captions.html
+# local Qdrant data (vector store)
+/qdrant_storage

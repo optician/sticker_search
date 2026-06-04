@@ -1,7 +1,8 @@
 # sticker-search
 
 Search Telegram stickers by text. Pipeline stages: scrape packs → caption →
-embed → vector search. The **scraper** and **captioner** exist so far.
+embed → vector search. The **scraper**, **captioner**, and **embedder** exist so
+far.
 
 ## Running the scraper
 
@@ -224,6 +225,60 @@ and serves thumbnails from `--images-dir` (default `stickers`).
 |------|---------|-------------|
 | `--port <n>` | `8080` | Port to listen on. |
 | `--images-dir <dir>` | `stickers` | Root for the served thumbnails. |
+
+## Running the embedder
+
+Embeds stored captions with a local text-embedding model (via Ollama) and writes
+the vectors to [Qdrant](https://qdrant.tech), one collection per
+`(caption_model, prompt_version, embed_model)` set.
+
+### Prerequisites
+
+- A running Ollama with an embedding model pulled (multilingual, incl. Russian):
+  ```bash
+  ollama pull bge-m3
+  ```
+- A running Qdrant:
+  ```bash
+  docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+    -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant
+  ```
+- Captions already produced by the captioner.
+
+### Running a batch
+
+```bash
+# embed every qwen3-vl:32b / v1 caption with bge-m3 (defaults)
+cargo run -p embedder
+
+# scope / cheap test run
+cargo run -p embedder -- --limit 10
+```
+
+```text
+done: embedded 243, skipped 0, failed 0 → collection stickers__qwen3-vl_32b__v1__bge-m3
+```
+
+**Idempotent.** Each point's id *is* the sticker UUID, so re-embedding a sticker
+overwrites that one point — re-running never creates duplicates. A sticker
+already present in the collection is skipped; `--force` re-embeds and overwrites
+it in place.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--caption-model <tag>` | `qwen3-vl:32b` | Which captions to embed (source set). |
+| `--prompt-version <v>` | `v1` | Prompt version of those captions. |
+| `--embed-model <tag>` | `bge-m3` | Ollama embedding model. |
+| `--dim <n>` | `1024` | Vector dimensionality; must match `--embed-model`. |
+| `--force` | off | Re-embed stickers already in the collection. |
+| `--limit <n>` | _none_ | Stop after N captions. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Caption database. |
+
+Swapping the embedding model is a `--embed-model`/`--dim` change: it writes a
+separate collection, so sets coexist for comparison (same as caption models).
+Inspect what's stored at the Qdrant dashboard: http://localhost:6333/dashboard.
 
 ## Tests
 

@@ -64,6 +64,52 @@ pub enum CaptionStickerError {
     Store(#[from] StoreError),
 }
 
+/// Errors from the text-embedding model (e.g. Ollama `bge-m3`).
+#[derive(Debug, Error)]
+pub enum EmbeddingGatewayError {
+    #[error("embedding transport error: {0}")]
+    Transport(String),
+    #[error("embedding model returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("embedding response timed out")]
+    Timeout,
+    #[error("could not parse embedding response: {0}")]
+    Parse(String),
+}
+
+/// Errors from the vector store (Qdrant over its REST API).
+#[derive(Debug, Error)]
+pub enum VectorStoreError {
+    #[error("vector store transport error: {0}")]
+    Transport(String),
+    #[error("vector store returned HTTP {0}: {1}")]
+    HttpStatus(u16, String),
+    #[error("could not parse vector store response: {0}")]
+    Parse(String),
+}
+
+/// Aggregate error for embedding a single caption. Per-sticker failures are
+/// logged and counted; they never abort the run.
+#[derive(Debug, Error)]
+pub enum EmbedStickerError {
+    #[error(transparent)]
+    Gateway(#[from] EmbeddingGatewayError),
+    #[error(transparent)]
+    Store(#[from] VectorStoreError),
+    #[error("embedder returned {got} dims but the collection expects {expected}")]
+    DimensionMismatch { expected: usize, got: usize },
+}
+
+/// Run-level error for the embedding use-case: setup failures that abort before
+/// per-sticker work (listing captions, creating the collection).
+#[derive(Debug, Error)]
+pub enum EmbedError {
+    #[error(transparent)]
+    Repo(#[from] RepoError),
+    #[error(transparent)]
+    Store(#[from] VectorStoreError),
+}
+
 /// Run-level error for the captioning use-case. Carries setup failures that
 /// abort before processing (prompt precondition, listing stickers). Per-sticker
 /// failures are logged and counted, never wrapped here.

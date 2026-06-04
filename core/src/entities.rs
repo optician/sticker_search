@@ -136,6 +136,54 @@ pub struct Caption {
     pub created_at: OffsetDateTime,
 }
 
+impl Caption {
+    /// The single text string fed to the embedder. Composes the caption's fields
+    /// into one document so query text and stored captions share a vector space.
+    ///
+    /// Order: scene, then verbatim on-image text (OCR — often the meme's whole
+    /// point), then tone, then the situations. Empty optional fields are dropped
+    /// so the embedder never sees dangling labels. Parts are joined with `". "`.
+    pub fn embed_text(&self) -> String {
+        let mut parts = vec![self.scene.clone()];
+        if !self.on_image_text.is_empty() {
+            parts.push(format!("text: {}", self.on_image_text));
+        }
+        parts.push(format!("tone: {}", self.tone));
+        if !self.situations.is_empty() {
+            parts.push(format!("situations: {}", self.situations.join(", ")));
+        }
+        parts.join(". ")
+    }
+}
+
+/// Distance metric a vector collection scores with. Cosine is the default for
+/// normalized text embeddings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DistanceMetric {
+    #[default]
+    Cosine,
+    Dot,
+    Euclid,
+}
+
+/// Provenance stored alongside each vector so a hit resolves back to its sticker
+/// and the exact `(caption model, prompt, embed model)` that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorPayload {
+    pub sticker_id: Uuid,
+    pub caption_model: String,
+    pub prompt_version: String,
+    pub embed_model: String,
+}
+
+/// One point to store: the sticker UUID as the id, its vector, and provenance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorPoint {
+    pub id: Uuid,
+    pub vector: Vec<f32>,
+    pub payload: VectorPayload,
+}
+
 /// A captioning prompt, stored once per version. The integrity guard in the
 /// use-case ensures a `version` string maps to exactly one `text`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,4 +192,38 @@ pub struct Prompt {
     pub text: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caption(scene: &str, ocr: &str, tone: &str, situations: &[&str]) -> Caption {
+        Caption {
+            sticker_id: Uuid::nil(),
+            model: "qwen".into(),
+            prompt_version: "v1".into(),
+            scene: scene.into(),
+            on_image_text: ocr.into(),
+            tone: tone.into(),
+            situations: situations.iter().map(|s| s.to_string()).collect(),
+            raw: String::new(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn embed_text_composes_all_fields_in_order() {
+        let c = caption("a chicken on a pan", "ЗАПАХЛО", "humorous", &["cooking", "panic"]);
+        assert_eq!(
+            c.embed_text(),
+            "a chicken on a pan. text: ЗАПАХЛО. tone: humorous. situations: cooking, panic",
+        );
+    }
+
+    #[test]
+    fn embed_text_drops_empty_ocr_and_situations() {
+        let c = caption("a plain cat", "", "calm", &[]);
+        assert_eq!(c.embed_text(), "a plain cat. tone: calm");
+    }
 }

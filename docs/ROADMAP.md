@@ -20,20 +20,28 @@ UUID across all stages.
   `run`, `stats`, `list`, `search`, `show`, `gallery` (static HTML),
   `serve` (review server: filter by pack, sort by date), `prompts`. See `README.md`.
 
+- **Embedder** (`embedder` + `core`/`infra`). Offline batch over captions via a
+  local text-embedding model on Ollama (`bge-m3`, multilingual, 1024-dim,
+  cosine). Reads the captions of one `(caption_model, prompt_version)` set,
+  composes `Caption::embed_text()` (scene + verbatim OCR + tone + situations),
+  and stores vectors in Qdrant — **one collection per
+  `(caption_model, prompt_version, embed_model)`** (`collection_name`), point id
+  = sticker UUID, provenance in the payload. New `EmbeddingGateway` +
+  `VectorStore` + `CaptionReader` ports; `OllamaEmbeddingGateway` +
+  `QdrantVectorStore` (REST, no gRPC) adapters. Idempotent skip checked before
+  the model call; `--force` re-embeds; dimension mismatch is a per-sticker
+  failure. Invariant: query text and stored captions must go through the *same*
+  embedder. Caption-only for now; hybrid CLIP image vectors deferred until
+  caption-only search shows concrete misses.
+
 ## Remaining
 
-### Embedder
-- **Target:** vectors that make query text and stickers comparable.
-- **Solution:** text-embedding model over captions (ONNX via `ort`, or Ollama
-  `nomic-embed`). Optionally also CLIP/SigLIP image vectors (`ort`) for hybrid
-  scoring. Invariant: query text and stored captions go through the *same*
-  embedder. Store vectors keyed by sticker UUID.
-
-### Index + query
+### Query
 - **Target:** text query → ranked stickers.
-- **Solution:** at sticker scale, brute-force cosine in Rust (load vectors, sort);
-  swap to Qdrant only if it outgrows memory. Query path: embed query → search →
-  return UUIDs → resolve images from `meta.sqlite`.
+- **Solution:** embed the query with the *same* `EmbeddingGateway`, search the
+  active collection via Qdrant (`VectorStore::search`, to be added), return point
+  ids (sticker UUIDs) → resolve images from `meta.sqlite`. Storage already lives
+  in Qdrant; this stage is the read path against it.
 
 ### Bot (live interface)
 - **Target:** users query and receive stickers in Telegram.
@@ -42,11 +50,18 @@ UUID across all stages.
 
 ## Open questions
 
-- Thumbnail quality sufficient for embeddings, or render originals? (Captioning
-  works well at thumbnail res — OCR reads stylized Cyrillic on 128–320px images.)
-- Caption embeddings alone, or hybrid with CLIP image vectors?
+- Is `embed_text()`'s field composition (scene + OCR + tone + situations) the
+  best document for retrieval? Revisit once the query stage lets us judge real
+  searches.
 
 ## Resolved / notes
+
+- **Caption embeddings alone, or hybrid with CLIP image vectors?** Caption-only
+  for now: one model, simplest path, and the OCR-rich captions already carry the
+  meme text CLIP would miss. Add CLIP image vectors only if caption-only search
+  shows concrete "the image shows X but the caption never said X" misses. (This
+  also moots image resolution for embeddings — the embedder reads text, not the
+  thumbnail.)
 
 - **Local VLM strong enough on memes/OCR?** Yes for `qwen3-vl:32b` — verbatim
   Cyrillic OCR incl. deliberately-misspelled text, useful scene/tone/situations.

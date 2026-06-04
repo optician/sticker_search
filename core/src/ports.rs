@@ -2,9 +2,13 @@
 //! implement these; tests use in-memory fakes.
 
 use crate::entities::{
-    Caption, CaptionResult, FileData, Pack, Prompt, RemoteStickerSet, Sticker,
+    Caption, CaptionResult, DistanceMetric, FileData, Pack, Prompt, RemoteStickerSet, Sticker,
+    VectorPoint,
 };
-use crate::error::{CaptionGatewayError, GatewayError, RepoError, StoreError};
+use crate::error::{
+    CaptionGatewayError, EmbeddingGatewayError, GatewayError, RepoError, StoreError,
+    VectorStoreError,
+};
 use uuid::Uuid;
 
 /// Source of sticker data (Telegram Bot API in production).
@@ -66,4 +70,50 @@ pub trait CaptionRepository {
     fn upsert_caption(&self, caption: &Caption) -> Result<(), RepoError>;
     fn find_prompt(&self, version: &str) -> Result<Option<Prompt>, RepoError>;
     fn upsert_prompt(&self, prompt: &Prompt) -> Result<(), RepoError>;
+}
+
+/// Read side feeding the embedder: the captions produced by one
+/// `(model, prompt_version)`, in a stable order. Narrow on purpose — the
+/// embedding use-case has no business with prompts or writes.
+pub trait CaptionReader {
+    fn list_captions(
+        &self,
+        model: &str,
+        prompt_version: &str,
+    ) -> Result<Vec<Caption>, RepoError>;
+}
+
+/// Source of text embeddings (a local model via Ollama in production).
+///
+/// `dim` is the fixed dimensionality of this model's vectors; the use-case
+/// creates the collection with it up front and rejects any vector that disagrees.
+#[allow(async_fn_in_trait)]
+pub trait EmbeddingGateway {
+    fn model(&self) -> &str;
+    fn dim(&self) -> usize;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingGatewayError>;
+}
+
+/// Persistence of vectors (Qdrant in production). One collection per
+/// `(caption_model, prompt_version, embed_model)` set; points are keyed by the
+/// sticker UUID so a sticker appears at most once per set.
+#[allow(async_fn_in_trait)]
+pub trait VectorStore {
+    /// Idempotently create `collection` for `dim`-dimensional vectors scored with
+    /// `metric`. A no-op if it already exists with a compatible config.
+    async fn ensure_collection(
+        &self,
+        collection: &str,
+        dim: usize,
+        metric: DistanceMetric,
+    ) -> Result<(), VectorStoreError>;
+    /// Whether a point with `point_id` already exists in `collection`.
+    async fn has_vector(
+        &self,
+        collection: &str,
+        point_id: Uuid,
+    ) -> Result<bool, VectorStoreError>;
+    /// Insert or overwrite a point.
+    async fn upsert(&self, collection: &str, point: &VectorPoint)
+        -> Result<(), VectorStoreError>;
 }

@@ -3,7 +3,7 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use sticker_core::entities::{Caption, Pack, Prompt, Sticker, StickerFormat};
 use sticker_core::error::RepoError;
-use sticker_core::ports::{CaptionRepository, StickerRepository};
+use sticker_core::ports::{CaptionReader, CaptionRepository, StickerRepository};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -322,6 +322,54 @@ impl CaptionRepository for SqliteRepository {
             )
             .map_err(storage)?;
         Ok(())
+    }
+}
+
+impl CaptionReader for SqliteRepository {
+    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT c.sticker_id, c.model, c.prompt_version, c.scene, c.on_image_text,
+                        c.tone, c.situations, c.raw, c.created_at
+                 FROM captions c
+                 JOIN stickers s ON s.id = c.sticker_id
+                 WHERE c.model = ?1 AND c.prompt_version = ?2
+                 ORDER BY s.pack_id, s.position",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map(params![model, prompt_version], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                ))
+            })
+            .map_err(storage)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let c = row.map_err(storage)?;
+            out.push(Caption {
+                sticker_id: parse_uuid(&c.0)?,
+                model: c.1,
+                prompt_version: c.2,
+                scene: c.3,
+                on_image_text: c.4,
+                tone: c.5,
+                situations: serde_json::from_str(&c.6).map_err(storage)?,
+                raw: c.7,
+                created_at: parse_time(&c.8)?,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -770,6 +818,19 @@ mod tests {
     #[test]
     fn caption_packs_lists_distinct_packs_with_captions() {
         assert_eq!(seeded().caption_packs().unwrap(), vec!["packA".to_string()]);
+    }
+
+    #[test]
+    fn list_captions_returns_only_the_matching_set_in_position_order() {
+        let repo = seeded();
+        // qwen/v1 captioned s0 (position 0) and s1 (position 1); llava/v1 only s0.
+        let qwen = repo.list_captions("qwen", "v1").unwrap();
+        assert_eq!(qwen.len(), 2);
+        assert!(qwen.iter().all(|c| c.model == "qwen" && c.prompt_version == "v1"));
+        assert_eq!(qwen[0].scene, "a chicken on a pan", "s0 (position 0) first");
+
+        assert_eq!(repo.list_captions("llava", "v1").unwrap().len(), 1);
+        assert!(repo.list_captions("qwen", "v2").unwrap().is_empty());
     }
 
     #[test]

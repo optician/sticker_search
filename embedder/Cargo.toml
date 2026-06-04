@@ -1,0 +1,16 @@
+[package]
+name = "embedder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sticker-core = { workspace = true }
+sticker-infra = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

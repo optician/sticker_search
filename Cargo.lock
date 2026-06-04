@@ -261,6 +261,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedder"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "rstest",
+ "sticker-core",
+ "sticker-infra",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
