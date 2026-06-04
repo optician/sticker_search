@@ -2,8 +2,8 @@
 //! implement these; tests use in-memory fakes.
 
 use crate::entities::{
-    Caption, CaptionResult, DistanceMetric, FileData, Pack, PackRequest, Prompt, RemoteStickerSet,
-    ScoredPoint, Sticker, VectorPoint,
+    Caption, CaptionResult, DistanceMetric, EmbedDoc, FileData, Pack, PackRequest, Prompt,
+    RemoteStickerSet, ScoredPoint, Sticker, VectorPoint,
 };
 use crate::error::{
     CaptionGatewayError, EmbeddingGatewayError, GatewayError, RepoError, StoreError,
@@ -94,10 +94,11 @@ pub trait CaptionRepository {
 }
 
 /// Read side feeding the embedder: the captions produced by one
-/// `(model, prompt_version)`, in a stable order. Narrow on purpose — the
-/// embedding use-case has no business with prompts or writes.
+/// `(model, prompt_version)`, in a stable order, each enriched with the sticker's
+/// emoji and pack context (`EmbedDoc`) that the document composes in. Narrow on
+/// purpose — the embedding use-case has no business with prompts or writes.
 pub trait CaptionReader {
-    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError>;
+    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<EmbedDoc>, RepoError>;
 }
 
 /// Read side feeding the query path: the single caption behind a vector hit.

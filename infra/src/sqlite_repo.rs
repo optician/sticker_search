@@ -2,7 +2,9 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::sync::{Mutex, MutexGuard};
-use sticker_core::entities::{Caption, Pack, PackRequest, Prompt, Sticker, StickerFormat};
+use sticker_core::entities::{
+    Caption, EmbedDoc, Pack, PackRequest, Prompt, Sticker, StickerFormat,
+};
 use sticker_core::error::RepoError;
 use sticker_core::ports::{
     CaptionLookup, CaptionReader, CaptionRepository, PackRequests, StickerRepository,
@@ -207,6 +209,24 @@ fn build_caption(c: CaptionCols) -> Result<Caption, RepoError> {
         situations: serde_json::from_str(&c.6).map_err(storage)?,
         raw: c.7,
         created_at: parse_time(&c.8)?,
+    })
+}
+
+/// The embedder's row: the 9 caption columns plus the sticker emoji and the
+/// pack name/title the document folds in. Selected as `{CAPTION_SELECT}, s.emoji,
+/// p.name, p.title`, so the three extras land at indices 9, 10, 11.
+type EmbedDocCols = (CaptionCols, Option<String>, String, String);
+
+fn embed_doc_cols(r: &Row) -> rusqlite::Result<EmbedDocCols> {
+    Ok((caption_cols(r)?, r.get(9)?, r.get(10)?, r.get(11)?))
+}
+
+fn build_embed_doc(c: EmbedDocCols) -> Result<EmbedDoc, RepoError> {
+    Ok(EmbedDoc {
+        caption: build_caption(c.0)?,
+        emoji: c.1,
+        pack_name: c.2,
+        pack_title: c.3,
     })
 }
 
@@ -427,24 +447,25 @@ impl CaptionRepository for SqliteRepository {
 }
 
 impl CaptionReader for SqliteRepository {
-    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError> {
+    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<EmbedDoc>, RepoError> {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT {CAPTION_SELECT}
+                "SELECT {CAPTION_SELECT}, s.emoji, p.name, p.title
                  FROM captions c
                  JOIN stickers s ON s.id = c.sticker_id
+                 JOIN packs p    ON p.id = s.pack_id
                  WHERE c.model = ?1 AND c.prompt_version = ?2
                  ORDER BY s.pack_id, s.position"
             ))
             .map_err(storage)?;
         let rows = stmt
-            .query_map(params![model, prompt_version], caption_cols)
+            .query_map(params![model, prompt_version], embed_doc_cols)
             .map_err(storage)?;
 
         let mut out = Vec::new();
         for row in rows {
-            out.push(build_caption(row.map_err(storage)?)?);
+            out.push(build_embed_doc(row.map_err(storage)?)?);
         }
         Ok(out)
     }
@@ -1020,12 +1041,44 @@ mod tests {
         assert_eq!(qwen.len(), 2);
         assert!(
             qwen.iter()
-                .all(|c| c.model == "qwen" && c.prompt_version == "v1")
+                .all(|d| d.caption.model == "qwen" && d.caption.prompt_version == "v1")
         );
-        assert_eq!(qwen[0].scene, "a chicken on a pan", "s0 (position 0) first");
+        assert_eq!(
+            qwen[0].caption.scene, "a chicken on a pan",
+            "s0 (position 0) first"
+        );
 
         assert_eq!(repo.list_captions("llava", "v1").unwrap().len(), 1);
         assert!(repo.list_captions("qwen", "v2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_captions_enriches_with_emoji_and_pack_for_the_document() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let p = pack(); // name "packA", title "Title"
+        repo.upsert_pack(&p).unwrap();
+        repo.upsert_prompt(&Prompt {
+            version: "v1".into(),
+            text: "t".into(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        })
+        .unwrap();
+        let mut s = sticker_n(p.id, 0);
+        s.emoji = Some("🥹".into());
+        repo.upsert_sticker(&s).unwrap();
+        repo.upsert_caption(&caption(s.id, "qwen", "v1")).unwrap();
+
+        let docs = repo.list_captions("qwen", "v1").unwrap();
+        let d = &docs[0];
+        assert_eq!(d.emoji.as_deref(), Some("🥹"));
+        assert_eq!(d.pack_name, "packA");
+        assert_eq!(d.pack_title, "Title");
+        // The composed document carries emoji and pack through to the embedder.
+        assert_eq!(
+            d.embed_text(),
+            "scene. text: ЗАПАХЛО. tone: humorous. emoji: 🥹. \
+             situations: a, b. pack: Title (packA)",
+        );
     }
 
     #[test]

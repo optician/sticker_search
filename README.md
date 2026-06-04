@@ -232,6 +232,12 @@ Embeds stored captions with a local text-embedding model (via Ollama) and writes
 the vectors to [Qdrant](https://qdrant.tech), one collection per
 `(caption_model, prompt_version, embed_model)` set.
 
+The embedded document is composed from the caption (`scene`, on-image text,
+`tone`, `situations`) plus two signals that ride alongside it: the sticker's
+sender-assigned **emoji** and its **pack** name/title. Changing this composition
+only affects newly written vectors — re-run with `--force` to refresh a
+collection embedded before the change.
+
 ### Prerequisites
 
 - A running Ollama with an embedding model pulled (multilingual, incl. Russian):

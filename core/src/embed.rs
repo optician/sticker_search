@@ -2,7 +2,7 @@
 //! `(caption_model, prompt_version)` into vectors and store them in a per-set
 //! collection, keyed by the sticker UUID. Mirrors `CaptionStickers`.
 
-use crate::entities::{Caption, DistanceMetric, VectorPayload, VectorPoint};
+use crate::entities::{DistanceMetric, EmbedDoc, VectorPayload, VectorPoint};
 use crate::error::{EmbedError, EmbedStickerError};
 use crate::ports::{CaptionReader, EmbeddingGateway, VectorStore};
 use uuid::Uuid;
@@ -125,17 +125,17 @@ where
         let total = cfg.limit.unwrap_or(captions.len()).min(captions.len());
 
         let mut summary = EmbedSummary::default();
-        for (i, caption) in captions.iter().take(total).enumerate() {
+        for (i, doc) in captions.iter().take(total).enumerate() {
             let report = |event| {
                 (self.report)(EmbedProgress {
                     index: i + 1,
                     total,
-                    sticker_id: caption.sticker_id,
+                    sticker_id: doc.caption.sticker_id,
                     event,
                 });
             };
             report(EmbedEvent::Start);
-            match self.embed_one(&collection, caption, cfg).await {
+            match self.embed_one(&collection, doc, cfg).await {
                 Ok(Outcome::Embedded) => {
                     summary.embedded += 1;
                     report(EmbedEvent::Embedded);
@@ -146,7 +146,7 @@ where
                 }
                 Err(e) => {
                     summary.failed += 1;
-                    tracing::warn!(sticker = %caption.sticker_id, error = %e, "embed failed");
+                    tracing::warn!(sticker = %doc.caption.sticker_id, error = %e, "embed failed");
                     report(EmbedEvent::Failed);
                 }
             }
@@ -157,15 +157,15 @@ where
     async fn embed_one(
         &self,
         collection: &str,
-        caption: &Caption,
+        doc: &EmbedDoc,
         cfg: EmbedRun<'_>,
     ) -> Result<Outcome, EmbedStickerError> {
-        let id = caption.sticker_id;
+        let id = doc.caption.sticker_id;
         if !cfg.force && self.store.has_vector(collection, id).await? {
             return Ok(Outcome::Skipped);
         }
 
-        let vector = self.gateway.embed(&caption.embed_text()).await?;
+        let vector = self.gateway.embed(&doc.embed_text()).await?;
         let expected = self.gateway.dim();
         if vector.len() != expected {
             return Err(EmbedStickerError::DimensionMismatch {
@@ -198,22 +198,31 @@ enum Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entities::Caption;
     use crate::error::{EmbeddingGatewayError, RepoError, VectorStoreError};
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
     use time::OffsetDateTime;
 
-    fn caption(sticker_id: Uuid, model: &str, version: &str, scene: &str) -> Caption {
-        Caption {
-            sticker_id,
-            model: model.into(),
-            prompt_version: version.into(),
-            scene: scene.into(),
-            on_image_text: String::new(),
-            tone: "neutral".into(),
-            situations: vec![],
-            raw: String::new(),
-            created_at: OffsetDateTime::UNIX_EPOCH,
+    /// Build an `EmbedDoc` (the embedder's input) with a minimal caption plus
+    /// fixed pack context. Emoji omitted — embed_text composition is covered in
+    /// `entities`; here we only care about the use-case's control flow.
+    fn caption(sticker_id: Uuid, model: &str, version: &str, scene: &str) -> EmbedDoc {
+        EmbedDoc {
+            caption: Caption {
+                sticker_id,
+                model: model.into(),
+                prompt_version: version.into(),
+                scene: scene.into(),
+                on_image_text: String::new(),
+                tone: "neutral".into(),
+                situations: vec![],
+                raw: String::new(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            emoji: None,
+            pack_name: "packname".into(),
+            pack_title: "Pack Title".into(),
         }
     }
 
@@ -266,7 +275,7 @@ mod tests {
     }
 
     struct FakeCaptions {
-        rows: Vec<Caption>,
+        rows: Vec<EmbedDoc>,
     }
 
     impl CaptionReader for FakeCaptions {
@@ -274,11 +283,11 @@ mod tests {
             &self,
             model: &str,
             prompt_version: &str,
-        ) -> Result<Vec<Caption>, RepoError> {
+        ) -> Result<Vec<EmbedDoc>, RepoError> {
             Ok(self
                 .rows
                 .iter()
-                .filter(|c| c.model == model && c.prompt_version == prompt_version)
+                .filter(|d| d.caption.model == model && d.caption.prompt_version == prompt_version)
                 .cloned()
                 .collect())
         }
@@ -351,7 +360,7 @@ mod tests {
 
     fn app(
         gw: FakeGateway,
-        rows: Vec<Caption>,
+        rows: Vec<EmbedDoc>,
         store: FakeStore,
     ) -> EmbedCaptions<FakeGateway, FakeCaptions, FakeStore> {
         EmbedCaptions::new(gw, FakeCaptions { rows }, store)

@@ -136,22 +136,44 @@ pub struct Caption {
     pub created_at: OffsetDateTime,
 }
 
-impl Caption {
+/// A caption enriched with the sticker- and pack-level context the embedder
+/// folds into one document. `Caption` stays a faithful mirror of the `captions`
+/// table; the emoji lives on `stickers` and the name/title on `packs`, so they
+/// ride alongside here rather than polluting `Caption`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedDoc {
+    pub caption: Caption,
+    /// The sticker's sender-assigned emoji (`stickers.emoji`); an intent signal.
+    pub emoji: Option<String>,
+    /// Pack slug (`packs.name`), e.g. `hamstersad`.
+    pub pack_name: String,
+    /// Human-readable pack title (`packs.title`), e.g. `Sad Hamster`.
+    pub pack_title: String,
+}
+
+impl EmbedDoc {
     /// The single text string fed to the embedder. Composes the caption's fields
-    /// into one document so query text and stored captions share a vector space.
+    /// plus the emoji and pack context into one document so query text and stored
+    /// captions share a vector space.
     ///
-    /// Order: scene, then verbatim on-image text (OCR — often the meme's whole
-    /// point), then tone, then the situations. Empty optional fields are dropped
-    /// so the embedder never sees dangling labels. Parts are joined with `". "`.
+    /// Order: scene, verbatim on-image text (OCR — often the meme's whole point),
+    /// tone, emoji (another intent signal, beside tone), situations, then the pack
+    /// as weakest context at the tail. Empty optional fields are dropped so the
+    /// embedder never sees dangling labels. Parts are joined with `". "`.
     pub fn embed_text(&self) -> String {
-        let mut parts = vec![self.scene.clone()];
-        if !self.on_image_text.is_empty() {
-            parts.push(format!("text: {}", self.on_image_text));
+        let c = &self.caption;
+        let mut parts = vec![c.scene.clone()];
+        if !c.on_image_text.is_empty() {
+            parts.push(format!("text: {}", c.on_image_text));
         }
-        parts.push(format!("tone: {}", self.tone));
-        if !self.situations.is_empty() {
-            parts.push(format!("situations: {}", self.situations.join(", ")));
+        parts.push(format!("tone: {}", c.tone));
+        if let Some(emoji) = self.emoji.as_deref().filter(|e| !e.is_empty()) {
+            parts.push(format!("emoji: {emoji}"));
         }
+        if !c.situations.is_empty() {
+            parts.push(format!("situations: {}", c.situations.join(", ")));
+        }
+        parts.push(format!("pack: {} ({})", self.pack_title, self.pack_name));
         parts.join(". ")
     }
 }
@@ -268,23 +290,49 @@ mod tests {
         }
     }
 
+    fn doc(caption: Caption, emoji: Option<&str>) -> EmbedDoc {
+        EmbedDoc {
+            caption,
+            emoji: emoji.map(Into::into),
+            pack_name: "hamstersad".into(),
+            pack_title: "Sad Hamster".into(),
+        }
+    }
+
     #[test]
     fn embed_text_composes_all_fields_in_order() {
-        let c = caption(
-            "a chicken on a pan",
-            "ЗАПАХЛО",
-            "humorous",
-            &["cooking", "panic"],
+        let d = doc(
+            caption(
+                "a chicken on a pan",
+                "ЗАПАХЛО",
+                "humorous",
+                &["cooking", "panic"],
+            ),
+            Some("🥹"),
         );
         assert_eq!(
-            c.embed_text(),
-            "a chicken on a pan. text: ЗАПАХЛО. tone: humorous. situations: cooking, panic",
+            d.embed_text(),
+            "a chicken on a pan. text: ЗАПАХЛО. tone: humorous. emoji: 🥹. \
+             situations: cooking, panic. pack: Sad Hamster (hamstersad)",
         );
     }
 
     #[test]
-    fn embed_text_drops_empty_ocr_and_situations() {
-        let c = caption("a plain cat", "", "calm", &[]);
-        assert_eq!(c.embed_text(), "a plain cat. tone: calm");
+    fn embed_text_drops_empty_ocr_situations_and_emoji() {
+        // No OCR, no situations, no emoji — but tone and pack are always present.
+        let d = doc(caption("a plain cat", "", "calm", &[]), None);
+        assert_eq!(
+            d.embed_text(),
+            "a plain cat. tone: calm. pack: Sad Hamster (hamstersad)",
+        );
+    }
+
+    #[test]
+    fn embed_text_drops_empty_string_emoji() {
+        let d = doc(caption("a plain cat", "", "calm", &[]), Some(""));
+        assert_eq!(
+            d.embed_text(),
+            "a plain cat. tone: calm. pack: Sad Hamster (hamstersad)",
+        );
     }
 }
