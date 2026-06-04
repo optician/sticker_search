@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 use std::time::Duration;
-use sticker_core::entities::{DistanceMetric, VectorPoint};
+use sticker_core::entities::{DistanceMetric, ScoredPoint, VectorPoint};
 use sticker_core::error::VectorStoreError;
 use sticker_core::ports::VectorStore;
 use uuid::Uuid;
@@ -74,6 +74,43 @@ fn upsert_body(point: &VectorPoint) -> Value {
     })
 }
 
+/// Body for `POST /collections/{name}/points/search`. Payload/vectors aren't
+/// needed — the point id is the sticker UUID, which is all the read path uses.
+fn search_body(query_vector: &[f32], limit: usize, score_threshold: Option<f32>) -> Value {
+    let mut body = json!({
+        "vector": query_vector,
+        "limit": limit,
+        "with_payload": false,
+        "with_vector": false,
+    });
+    if let Some(t) = score_threshold {
+        body["score_threshold"] = json!(t);
+    }
+    body
+}
+
+/// Parse a Qdrant search response (`{ "result": [{ "id", "score" }, ...] }`)
+/// into ranked points. A malformed id/score is a parse error, not a silent drop.
+fn parse_search_results(body: &Value) -> Result<Vec<ScoredPoint>, VectorStoreError> {
+    let parse = || -> Option<Result<Vec<ScoredPoint>, VectorStoreError>> {
+        let items = body.get("result")?.as_array()?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let id_str = item.get("id")?.as_str()?;
+            let score = item.get("score")?.as_f64()? as f32;
+            let id = match Uuid::parse_str(id_str) {
+                Ok(id) => id,
+                Err(e) => return Some(Err(VectorStoreError::Parse(format!("point id {id_str:?}: {e}")))),
+            };
+            out.push(ScoredPoint { id, score });
+        }
+        Some(Ok(out))
+    };
+    parse().unwrap_or_else(|| {
+        Err(VectorStoreError::Parse(format!("unexpected search response shape: {body}")))
+    })
+}
+
 impl VectorStore for QdrantVectorStore {
     async fn ensure_collection(
         &self,
@@ -124,6 +161,25 @@ impl VectorStore for QdrantVectorStore {
             .map_err(transport)?;
         check_success(resp).await.map(|_| ())
     }
+
+    async fn search(
+        &self,
+        collection: &str,
+        query_vector: &[f32],
+        limit: usize,
+        score_threshold: Option<f32>,
+    ) -> Result<Vec<ScoredPoint>, VectorStoreError> {
+        let resp = self
+            .client
+            .post(format!("{}/collections/{}/points/search", self.base_url, collection))
+            .json(&search_body(query_vector, limit, score_threshold))
+            .send()
+            .await
+            .map_err(transport)?;
+        let resp = check_success(resp).await?;
+        let body: Value = resp.json().await.map_err(|e| VectorStoreError::Parse(e.to_string()))?;
+        parse_search_results(&body)
+    }
 }
 
 async fn check_success(resp: reqwest::Response) -> Result<reqwest::Response, VectorStoreError> {
@@ -156,6 +212,57 @@ mod tests {
         let body = create_collection_body(1024, DistanceMetric::Cosine);
         assert_eq!(body["vectors"]["size"], 1024);
         assert_eq!(body["vectors"]["distance"], "Cosine");
+    }
+
+    #[test]
+    fn search_body_carries_vector_limit_and_omits_threshold_when_none() {
+        let body = search_body(&[0.1, 0.2], 5, None);
+        assert_eq!(body["vector"].as_array().unwrap().len(), 2);
+        assert_eq!(body["limit"], 5);
+        assert_eq!(body["with_payload"], false);
+        assert!(body.get("score_threshold").is_none(), "no threshold key when None");
+    }
+
+    #[test]
+    fn search_body_includes_threshold_when_set() {
+        let body = search_body(&[0.1], 5, Some(0.42));
+        // f32 → JSON loses exactness; compare with tolerance.
+        let t = body["score_threshold"].as_f64().unwrap();
+        assert!((t - 0.42).abs() < 1e-6, "threshold ~0.42, got {t}");
+    }
+
+    #[test]
+    fn parse_search_results_reads_ranked_id_and_score() {
+        let id = Uuid::nil();
+        let body = json!({
+            "result": [
+                { "id": id.to_string(), "score": 0.9 },
+                { "id": id.to_string(), "score": 0.7 },
+            ],
+            "status": "ok",
+        });
+        let got = parse_search_results(&body).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], ScoredPoint { id, score: 0.9 });
+        assert_eq!(got[1].score, 0.7);
+    }
+
+    #[test]
+    fn parse_search_results_empty_is_ok() {
+        let body = json!({ "result": [] });
+        assert!(parse_search_results(&body).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_search_results_bad_id_is_a_parse_error() {
+        let body = json!({ "result": [ { "id": "not-a-uuid", "score": 0.5 } ] });
+        assert!(matches!(parse_search_results(&body), Err(VectorStoreError::Parse(_))));
+    }
+
+    #[test]
+    fn parse_search_results_missing_result_key_is_a_parse_error() {
+        let body = json!({ "status": "ok" });
+        assert!(matches!(parse_search_results(&body), Err(VectorStoreError::Parse(_))));
     }
 
     #[test]

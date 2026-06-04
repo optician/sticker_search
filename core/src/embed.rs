@@ -304,6 +304,16 @@ mod tests {
             self.points.borrow_mut().insert((collection.into(), point.id), point.clone());
             Ok(())
         }
+        async fn search(
+            &self,
+            _collection: &str,
+            _query_vector: &[f32],
+            _limit: usize,
+            _score_threshold: Option<f32>,
+        ) -> Result<Vec<crate::entities::ScoredPoint>, VectorStoreError> {
+            // The embedder never searches; unused in these tests.
+            Ok(vec![])
+        }
     }
 
     fn run_cfg<'a>() -> EmbedRun<'a> {

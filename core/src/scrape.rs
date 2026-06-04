@@ -257,6 +257,9 @@ mod tests {
                 .find(|s| s.file_unique_id == uid)
                 .cloned())
         }
+        fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError> {
+            Ok(self.stickers.borrow().iter().find(|s| s.id == id).cloned())
+        }
         fn upsert_sticker(&self, s: &Sticker) -> Result<(), RepoError> {
             let mut v = self.stickers.borrow_mut();
             match v.iter_mut().find(|x| x.file_unique_id == s.file_unique_id) {

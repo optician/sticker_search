@@ -10,6 +10,7 @@ pub mod entities;
 pub mod error;
 pub mod ports;
 pub mod scrape;
+pub mod search;
 
 pub use caption::{CaptionProgress, CaptionRun, CaptionStickers, CaptionSummary, ProgressEvent};
 pub use embed::{
@@ -17,14 +18,16 @@ pub use embed::{
 };
 pub use entities::{
     Caption, CaptionFields, CaptionResult, DistanceMetric, FileData, Pack, Prompt, RemoteSticker,
-    RemoteStickerSet, Sticker, StickerFormat, VectorPayload, VectorPoint,
+    RemoteStickerSet, ScoredPoint, SearchHit, Sticker, StickerFormat, VectorPayload, VectorPoint,
 };
 pub use error::{
     CaptionError, CaptionGatewayError, CaptionStickerError, EmbedError, EmbedStickerError,
-    EmbeddingGatewayError, GatewayError, RepoError, ScrapeError, StoreError, VectorStoreError,
+    EmbeddingGatewayError, GatewayError, RepoError, ScrapeError, SearchError, StoreError,
+    VectorStoreError,
 };
 pub use ports::{
-    CaptionGateway, CaptionReader, CaptionRepository, EmbeddingGateway, ImageStore,
+    CaptionGateway, CaptionLookup, CaptionReader, CaptionRepository, EmbeddingGateway, ImageStore,
     StickerRepository, TelegramGateway, VectorStore,
 };
 pub use scrape::{ScrapePacks, ScrapeSummary};
+pub use search::{SearchQuery, SearchStickers};

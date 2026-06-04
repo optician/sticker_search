@@ -1,8 +1,8 @@
 # sticker-search
 
 Search Telegram stickers by text. Pipeline stages: scrape packs → caption →
-embed → vector search. The **scraper**, **captioner**, and **embedder** exist so
-far.
+embed → vector search. The **scraper**, **captioner**, **embedder**, and the
+**query** server all exist; the live Telegram bot is the remaining stage.
 
 ## Running the scraper
 
@@ -279,6 +279,35 @@ it in place.
 Swapping the embedding model is a `--embed-model`/`--dim` change: it writes a
 separate collection, so sets coexist for comparison (same as caption models).
 Inspect what's stored at the Qdrant dashboard: http://localhost:6333/dashboard.
+
+## Searching (the query server)
+
+`captioner vsearch` serves a browser UI for vector search. Needs the same Ollama
++ Qdrant the embedder used, plus `stickers/` and `meta.sqlite`.
+
+```bash
+cargo run -p captioner -- vsearch
+# open http://localhost:8090/ and search (Cyrillic works)
+```
+
+It embeds the query with the *same* model the captions used, searches the
+matching collection, and shows each hit's thumbnail, cosine score, and caption.
+The flags must name the same `(caption-model, prompt-version, embed-model)` the
+embedder wrote, or the collection won't resolve.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port <n>` | `8090` | Port to listen on. |
+| `--caption-model <tag>` | `qwen3-vl:32b` | Caption set (collection) to search. |
+| `--prompt-version <v>` | `v1` | Prompt version of that set. |
+| `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
+| `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |
+| `--limit <n>` | `10` | Results per query (UI `k` box overrides). |
+| `--min-score <f>` | _none_ | Drop hits below this cosine score (UI `min` overrides). |
+| `--images-dir <path>` | `stickers` | Thumbnails, served under `/images/`. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Sticker + caption database. |
 
 ## Tests
 

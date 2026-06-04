@@ -287,6 +287,9 @@ mod tests {
         fn find_sticker_by_unique_id(&self, _: &str) -> Result<Option<Sticker>, RepoError> {
             Ok(None)
         }
+        fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError> {
+            Ok(self.stickers.iter().find(|s| s.id == id).cloned())
+        }
         fn upsert_sticker(&self, _: &Sticker) -> Result<(), RepoError> {
             Ok(())
         }

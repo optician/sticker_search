@@ -2,8 +2,8 @@
 //! implement these; tests use in-memory fakes.
 
 use crate::entities::{
-    Caption, CaptionResult, DistanceMetric, FileData, Pack, Prompt, RemoteStickerSet, Sticker,
-    VectorPoint,
+    Caption, CaptionResult, DistanceMetric, FileData, Pack, Prompt, RemoteStickerSet, ScoredPoint,
+    Sticker, VectorPoint,
 };
 use crate::error::{
     CaptionGatewayError, EmbeddingGatewayError, GatewayError, RepoError, StoreError,
@@ -28,6 +28,9 @@ pub trait StickerRepository {
     fn upsert_pack(&self, pack: &Pack) -> Result<(), RepoError>;
     fn find_sticker_by_unique_id(&self, file_unique_id: &str)
         -> Result<Option<Sticker>, RepoError>;
+    /// Look up a sticker by its UUID. Drives the query read path, which resolves
+    /// vector-store hits (keyed by UUID) back to displayable stickers.
+    fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError>;
     fn upsert_sticker(&self, sticker: &Sticker) -> Result<(), RepoError>;
     /// All stickers, optionally restricted to a single pack name, ordered by
     /// pack then position. Drives the captioning batch.
@@ -83,6 +86,19 @@ pub trait CaptionReader {
     ) -> Result<Vec<Caption>, RepoError>;
 }
 
+/// Read side feeding the query path: the single caption behind a vector hit.
+/// Separate from `CaptionReader` so the embedder keeps its narrow batch view and
+/// the query keeps its narrow point lookup. Keyed like a stored caption,
+/// `(sticker_id, model, prompt_version)`.
+pub trait CaptionLookup {
+    fn find_caption(
+        &self,
+        sticker_id: Uuid,
+        model: &str,
+        prompt_version: &str,
+    ) -> Result<Option<Caption>, RepoError>;
+}
+
 /// Source of text embeddings (a local model via Ollama in production).
 ///
 /// `dim` is the fixed dimensionality of this model's vectors; the use-case
@@ -116,4 +132,14 @@ pub trait VectorStore {
     /// Insert or overwrite a point.
     async fn upsert(&self, collection: &str, point: &VectorPoint)
         -> Result<(), VectorStoreError>;
+    /// Search `collection` for the `limit` nearest points to `query_vector`,
+    /// ranked best-first. `score_threshold` (when set) drops hits scoring below
+    /// it. `query_vector` must have the collection's dimensionality.
+    async fn search(
+        &self,
+        collection: &str,
+        query_vector: &[f32],
+        limit: usize,
+        score_threshold: Option<f32>,
+    ) -> Result<Vec<ScoredPoint>, VectorStoreError>;
 }

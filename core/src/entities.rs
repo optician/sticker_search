@@ -184,6 +184,24 @@ pub struct VectorPoint {
     pub payload: VectorPayload,
 }
 
+/// A single search result from the vector store: a point id (sticker UUID) and
+/// its similarity score. The store returns these ranked best-first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoredPoint {
+    pub id: Uuid,
+    pub score: f32,
+}
+
+/// A resolved search hit: the vector score plus the sticker and the caption that
+/// produced its vector. Returned by the `SearchStickers` use-case in rank order
+/// so a caller can both display the image and judge *why* it matched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHit {
+    pub score: f32,
+    pub sticker: Sticker,
+    pub caption: Caption,
+}
+
 /// A captioning prompt, stored once per version. The integrity guard in the
 /// use-case ensures a `version` string maps to exactly one `text`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

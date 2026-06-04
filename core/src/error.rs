@@ -110,6 +110,19 @@ pub enum EmbedError {
     Store(#[from] VectorStoreError),
 }
 
+/// Error for a single query through the `SearchStickers` use-case. A query is
+/// one shot (embed → search → resolve), so any failure aborts it; unlike the
+/// batch stages there are no per-item counts.
+#[derive(Debug, Error)]
+pub enum SearchError {
+    #[error(transparent)]
+    Gateway(#[from] EmbeddingGatewayError),
+    #[error(transparent)]
+    Store(#[from] VectorStoreError),
+    #[error(transparent)]
+    Repo(#[from] RepoError),
+}
+
 /// Run-level error for the captioning use-case. Carries setup failures that
 /// abort before processing (prompt precondition, listing stickers). Per-sticker
 /// failures are logged and counted, never wrapped here.

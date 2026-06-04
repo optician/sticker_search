@@ -3,7 +3,7 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use sticker_core::entities::{Caption, Pack, Prompt, Sticker, StickerFormat};
 use sticker_core::error::RepoError;
-use sticker_core::ports::{CaptionReader, CaptionRepository, StickerRepository};
+use sticker_core::ports::{CaptionLookup, CaptionReader, CaptionRepository, StickerRepository};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -133,6 +133,41 @@ fn build_sticker(c: StickerCols) -> Result<Sticker, RepoError> {
     })
 }
 
+/// The 9 caption columns, in `SELECT` order. `c.`-qualified so they're
+/// unambiguous when the captions table is joined to `stickers`.
+const CAPTION_SELECT: &str = "c.sticker_id, c.model, c.prompt_version, c.scene, c.on_image_text,
+                              c.tone, c.situations, c.raw, c.created_at";
+
+type CaptionCols = (String, String, String, String, String, String, String, String, String);
+
+fn caption_cols(r: &Row) -> rusqlite::Result<CaptionCols> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+    ))
+}
+
+fn build_caption(c: CaptionCols) -> Result<Caption, RepoError> {
+    Ok(Caption {
+        sticker_id: parse_uuid(&c.0)?,
+        model: c.1,
+        prompt_version: c.2,
+        scene: c.3,
+        on_image_text: c.4,
+        tone: c.5,
+        situations: serde_json::from_str(&c.6).map_err(storage)?,
+        raw: c.7,
+        created_at: parse_time(&c.8)?,
+    })
+}
+
 impl StickerRepository for SqliteRepository {
     fn find_pack_by_name(&self, name: &str) -> Result<Option<Pack>, RepoError> {
         let row: Option<(String, String, String, String)> = self
@@ -176,6 +211,20 @@ impl StickerRepository for SqliteRepository {
             .query_row(
                 &format!("SELECT {STICKER_SELECT} FROM stickers s WHERE s.file_unique_id = ?1"),
                 params![uid],
+                sticker_cols,
+            )
+            .optional()
+            .map_err(storage)?;
+
+        row.map(build_sticker).transpose()
+    }
+
+    fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError> {
+        let row = self
+            .conn
+            .query_row(
+                &format!("SELECT {STICKER_SELECT} FROM stickers s WHERE s.id = ?1"),
+                params![id.to_string()],
                 sticker_cols,
             )
             .optional()
@@ -329,47 +378,47 @@ impl CaptionReader for SqliteRepository {
     fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT c.sticker_id, c.model, c.prompt_version, c.scene, c.on_image_text,
-                        c.tone, c.situations, c.raw, c.created_at
+            .prepare(&format!(
+                "SELECT {CAPTION_SELECT}
                  FROM captions c
                  JOIN stickers s ON s.id = c.sticker_id
                  WHERE c.model = ?1 AND c.prompt_version = ?2
-                 ORDER BY s.pack_id, s.position",
-            )
+                 ORDER BY s.pack_id, s.position"
+            ))
             .map_err(storage)?;
         let rows = stmt
-            .query_map(params![model, prompt_version], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, String>(7)?,
-                    r.get::<_, String>(8)?,
-                ))
-            })
+            .query_map(params![model, prompt_version], caption_cols)
             .map_err(storage)?;
 
         let mut out = Vec::new();
         for row in rows {
-            let c = row.map_err(storage)?;
-            out.push(Caption {
-                sticker_id: parse_uuid(&c.0)?,
-                model: c.1,
-                prompt_version: c.2,
-                scene: c.3,
-                on_image_text: c.4,
-                tone: c.5,
-                situations: serde_json::from_str(&c.6).map_err(storage)?,
-                raw: c.7,
-                created_at: parse_time(&c.8)?,
-            });
+            out.push(build_caption(row.map_err(storage)?)?);
         }
         Ok(out)
+    }
+}
+
+impl CaptionLookup for SqliteRepository {
+    fn find_caption(
+        &self,
+        sticker_id: Uuid,
+        model: &str,
+        prompt_version: &str,
+    ) -> Result<Option<Caption>, RepoError> {
+        let row = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {CAPTION_SELECT} FROM captions c
+                     WHERE c.sticker_id = ?1 AND c.model = ?2 AND c.prompt_version = ?3"
+                ),
+                params![sticker_id.to_string(), model, prompt_version],
+                caption_cols,
+            )
+            .optional()
+            .map_err(storage)?;
+
+        row.map(build_caption).transpose()
     }
 }
 
@@ -831,6 +880,38 @@ mod tests {
 
         assert_eq!(repo.list_captions("llava", "v1").unwrap().len(), 1);
         assert!(repo.list_captions("qwen", "v2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn find_sticker_by_id_roundtrips_and_misses() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let p = pack();
+        repo.upsert_pack(&p).unwrap();
+        let s = sticker_n(p.id, 0);
+        repo.upsert_sticker(&s).unwrap();
+
+        assert_eq!(repo.find_sticker_by_id(s.id).unwrap().as_ref(), Some(&s));
+        assert_eq!(repo.find_sticker_by_id(Uuid::new_v4()).unwrap(), None);
+    }
+
+    #[test]
+    fn find_caption_resolves_one_set_and_misses_other_keys() {
+        let repo = seeded();
+        // seeded(): s0 has qwen/v1 (chicken scene) and llava/v1; s1 has qwen/v1.
+        let s0 = repo.list_stickers(None).unwrap()[0].id;
+
+        let hit = repo.find_caption(s0, "qwen", "v1").unwrap().unwrap();
+        assert_eq!(hit.sticker_id, s0);
+        assert_eq!(hit.model, "qwen");
+        assert_eq!(hit.scene, "a chicken on a pan");
+        assert_eq!(hit.situations, vec!["a".to_string(), "b".to_string()], "JSON column parsed");
+
+        // Same sticker, different model — a different caption.
+        assert_eq!(repo.find_caption(s0, "llava", "v1").unwrap().unwrap().model, "llava");
+        // No caption for this (model, version).
+        assert!(repo.find_caption(s0, "qwen", "v2").unwrap().is_none());
+        // No caption for an unknown sticker.
+        assert!(repo.find_caption(Uuid::new_v4(), "qwen", "v1").unwrap().is_none());
     }
 
     #[test]

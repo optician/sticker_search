@@ -34,14 +34,19 @@ UUID across all stages.
   embedder. Caption-only for now; hybrid CLIP image vectors deferred until
   caption-only search shows concrete misses.
 
-## Remaining
+- **Query** (`search` use-case in `core` + `vsearch` server in `captioner`). Text
+  query → ranked stickers. `SearchStickers` embeds the query with the *same*
+  `EmbeddingGateway` the captions used, searches the matching collection
+  (`VectorStore::search`, top-k + optional cosine `score_threshold`), and resolves
+  each ranked UUID back to its sticker + caption via two narrow read ports
+  (`StickerRepository::find_sticker_by_id`, new `CaptionLookup`). A hit whose
+  sticker/caption row is missing is skipped, not fatal. Driven by
+  `captioner vsearch`: a `tiny_http` server (sync loop bridged to the async query
+  path via `spawn_blocking` + `Handle::block_on`) serving a search box → ranked
+  result grid with thumbnails, scores, captions, and per-query latency. Query text
+  is percent-decoded so Cyrillic searches work. See `README.md`.
 
-### Query
-- **Target:** text query → ranked stickers.
-- **Solution:** embed the query with the *same* `EmbeddingGateway`, search the
-  active collection via Qdrant (`VectorStore::search`, to be added), return point
-  ids (sticker UUIDs) → resolve images from `meta.sqlite`. Storage already lives
-  in Qdrant; this stage is the read path against it.
+## Remaining
 
 ### Bot (live interface)
 - **Target:** users query and receive stickers in Telegram.
@@ -51,8 +56,9 @@ UUID across all stages.
 ## Open questions
 
 - Is `embed_text()`'s field composition (scene + OCR + tone + situations) the
-  best document for retrieval? Revisit once the query stage lets us judge real
-  searches.
+  best document for retrieval? Now judgeable: `captioner vsearch` shows each hit's
+  score next to the caption that produced it. Run real queries and look for misses
+  the field composition causes before tweaking it.
 
 ## Resolved / notes
 
