@@ -335,7 +335,18 @@ you type, embedded and searched through the same collection the embedder wrote.
 pack (it reads the pack name off the sticker). The bot can't see your installed
 packs — the Bot API has no such method — so you point it at the ones you want.
 `/add` only **queues** the pack (it doesn't run the minutes-long VLM/embed
-pipeline live); run it through the offline stages with:
+pipeline live). Process the queue with the full-cycle job, which drains the queue
+and runs scrape → caption → embed once, unloading each Ollama model before the
+next stage loads so the VLM and the embedder don't compete for VRAM:
+
+```bash
+export TELEGRAM_BOT_TOKEN=<the scraping bot's token>
+./pipeline.sh
+```
+
+It runs linearly and exits (no looping); any stage failing aborts the job.
+Override models/endpoints via env: `CAPTION_MODEL`, `EMBED_MODEL`, `OLLAMA_HOST`,
+`QDRANT_URL`. To run the stages by hand instead:
 
 ```bash
 cargo run -p scrapper -- --from-queue      # drain queued packs into stickers/
