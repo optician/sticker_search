@@ -13,7 +13,7 @@ use sticker_infra::{OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository}
 use thiserror::Error;
 
 /// The caption set to embed by default — matches the captioner's defaults.
-const DEFAULT_CAPTION_MODEL: &str = "qwen3-vl:32b";
+const DEFAULT_CAPTION_MODEL: &str = "qwen3-vl:8b";
 const DEFAULT_PROMPT_VERSION: &str = "v1";
 /// The embedding model. `bge-m3` is multilingual (Russian incl.) and emits 1024
 /// dims. Bump `--embed-model`/`--dim` together when swapping models.

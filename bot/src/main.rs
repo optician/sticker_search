@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 
 /// Defaults mirror the captioner/embedder so the bot resolves the same
 /// collection the vectors were written to.
-const DEFAULT_CAPTION_MODEL: &str = "qwen3-vl:32b";
+const DEFAULT_CAPTION_MODEL: &str = "qwen3-vl:8b";
 const DEFAULT_PROMPT_VERSION: &str = "v1";
 const DEFAULT_EMBED_MODEL: &str = "bge-m3";
 const DEFAULT_DIM: usize = 1024;

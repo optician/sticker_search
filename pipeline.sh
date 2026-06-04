@@ -4,13 +4,13 @@
 # embed, once. Makes every queued pack searchable and exits. Runs linearly with
 # no looping or polling; any stage failing aborts the whole job (non-zero exit).
 #
-# Ollama model lifecycle: captioning loads a large VLM (qwen3-vl:32b) and
+# Ollama model lifecycle: captioning loads a VLM (qwen3-vl:8b) and
 # embedding loads a separate model (bge-m3). To stop them competing for VRAM,
 # each model is unloaded from Ollama before the next stage's model is loaded.
 #
 # Config via env (defaults match the rest of the project):
 #   TELEGRAM_BOT_TOKEN  (required) the same bot that scraped the packs
-#   CAPTION_MODEL       default qwen3-vl:32b
+#   CAPTION_MODEL       default qwen3-vl:8b
 #   EMBED_MODEL         default bge-m3
 #   OLLAMA_HOST         default http://localhost:11434
 #   QDRANT_URL          default http://localhost:6333
@@ -21,7 +21,7 @@ set -euo pipefail
 # resolve regardless of the caller's working directory.
 cd "$(dirname "$0")"
 
-CAPTION_MODEL="${CAPTION_MODEL:-qwen3-vl:32b}"
+CAPTION_MODEL="${CAPTION_MODEL:-qwen3-vl:8b}"
 EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
 OLLAMA_URL="${OLLAMA_HOST:-http://localhost:11434}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"

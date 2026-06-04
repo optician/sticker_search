@@ -65,7 +65,7 @@ into the existing `stickers/meta.sqlite`: a literal `scene`, verbatim
 - A running Ollama with a vision model pulled, e.g.:
 
   ```bash
-  ollama pull qwen3-vl:32b
+  ollama pull qwen3-vl:8b
   ```
 
 - A populated `stickers/meta.sqlite` (run the scraper first).
@@ -74,7 +74,7 @@ into the existing `stickers/meta.sqlite`: a literal `scene`, verbatim
 
 The captioner is one binary with subcommands. The `run` subcommand does the
 captioning; bare `cargo run -p captioner` (no subcommand) is shorthand for
-`run` with defaults — caption every scraped sticker with `qwen3-vl:32b`:
+`run` with defaults — caption every scraped sticker with `qwen3-vl:8b`:
 
 ```bash
 # caption everything, default model
@@ -97,7 +97,7 @@ While it runs it shows a live progress line — the in-flight sticker (each take
 On completion it prints a summary:
 
 ```
-done: captioned 48, skipped 0, failed 0 (model qwen3-vl:32b, prompt v1)
+done: captioned 48, skipped 0, failed 0 (model qwen3-vl:8b, prompt v1)
 ```
 
 `run` options:
@@ -105,7 +105,7 @@ done: captioned 48, skipped 0, failed 0 (model qwen3-vl:32b, prompt v1)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--pack <name>` | _all packs_ | Restrict to a pack; repeatable. |
-| `--model <tag>` | `qwen3-vl:32b` | Ollama model tag. |
+| `--model <tag>` | `qwen3-vl:8b` | Ollama model tag. |
 | `--images-dir <dir>` | `stickers` | Root holding the per-pack thumbnails. |
 | `--force` | off | Re-caption stickers already done for this model + prompt. |
 | `--limit <n>` | _none_ | Stop after N stickers per pack. |
@@ -248,7 +248,7 @@ the vectors to [Qdrant](https://qdrant.tech), one collection per
 ### Running a batch
 
 ```bash
-# embed every qwen3-vl:32b / v1 caption with bge-m3 (defaults)
+# embed every qwen3-vl:8b / v1 caption with bge-m3 (defaults)
 cargo run -p embedder
 
 # scope / cheap test run
@@ -266,7 +266,7 @@ it in place.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--caption-model <tag>` | `qwen3-vl:32b` | Which captions to embed (source set). |
+| `--caption-model <tag>` | `qwen3-vl:8b` | Which captions to embed (source set). |
 | `--prompt-version <v>` | `v1` | Prompt version of those captions. |
 | `--embed-model <tag>` | `bge-m3` | Ollama embedding model. |
 | `--dim <n>` | `1024` | Vector dimensionality; must match `--embed-model`. |
@@ -298,7 +298,7 @@ embedder wrote, or the collection won't resolve.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port <n>` | `8090` | Port to listen on. |
-| `--caption-model <tag>` | `qwen3-vl:32b` | Caption set (collection) to search. |
+| `--caption-model <tag>` | `qwen3-vl:8b` | Caption set (collection) to search. |
 | `--prompt-version <v>` | `v1` | Prompt version of that set. |
 | `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
 | `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |
@@ -360,7 +360,7 @@ derived stage — `queued → scraped → captioned → ready`, with counts like
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--caption-model <tag>` | `qwen3-vl:32b` | Caption set (collection) to search. |
+| `--caption-model <tag>` | `qwen3-vl:8b` | Caption set (collection) to search. |
 | `--prompt-version <v>` | `v1` | Prompt version of that set. |
 | `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
 | `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |

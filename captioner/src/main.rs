@@ -44,7 +44,7 @@ this sticker in). Be concise.";
 /// Per-request timeout for the model. A cold 32B load can take ~70s.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
-const DEFAULT_MODEL: &str = "qwen3-vl:32b";
+const DEFAULT_MODEL: &str = "qwen3-vl:8b";
 
 /// Caption scraped sticker thumbnails with a local VLM (Ollama) and inspect the
 /// results. Captions land in the existing meta.sqlite, keyed by

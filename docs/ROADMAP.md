@@ -11,7 +11,8 @@ new packs). Each sticker is keyed by its UUID across all stages.
   `file_unique_id`. See `README.md`.
 
 - **Captioner** (`captioner` + `core`/`infra`). Offline batch over thumbnails via a
-  local VLM on Ollama (`qwen3-vl:32b`, validated incl. verbatim Cyrillic OCR).
+  local VLM on Ollama (`qwen3-vl:8b` by default; `qwen3-vl:32b` was validated
+  incl. verbatim Cyrillic OCR).
   Structured JSON → `scene`, `on_image_text` (OCR), `tone`, `situations`. New
   `CaptionGateway` port + `OllamaCaptionGateway` adapter; `captions`/`prompts`
   tables in the same SQLite store. Captions keyed by `(sticker_id, model,
