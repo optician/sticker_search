@@ -37,7 +37,12 @@ where
     }
 
     pub fn with_clock(gateway: G, repo: R, images: S, now: fn() -> OffsetDateTime) -> Self {
-        Self { gateway, repo, images, now }
+        Self {
+            gateway,
+            repo,
+            images,
+            now,
+        }
     }
 
     pub fn gateway(&self) -> &G {
@@ -88,7 +93,10 @@ where
         })?;
 
         for (position, remote) in set.stickers.iter().enumerate() {
-            match self.scrape_sticker(&set.name, pack_id, position as u32, remote).await {
+            match self
+                .scrape_sticker(&set.name, pack_id, position as u32, remote)
+                .await
+            {
                 Ok(Outcome::Downloaded) => summary.downloaded += 1,
                 Ok(Outcome::Skipped) => summary.skipped_existing += 1,
                 Err(e) => {
@@ -112,7 +120,9 @@ where
         position: u32,
         remote: &RemoteSticker,
     ) -> Result<Outcome, ScrapeError> {
-        let existing = self.repo.find_sticker_by_unique_id(&remote.file_unique_id)?;
+        let existing = self
+            .repo
+            .find_sticker_by_unique_id(&remote.file_unique_id)?;
         // Reuse the UUID and creation time of a known sticker; mint fresh otherwise.
         let id = existing.as_ref().map(|s| s.id).unwrap_or_else(Uuid::new_v4);
         let created_at = existing
@@ -127,8 +137,7 @@ where
         {
             Some(ex) => (ex.image_path.clone(), Outcome::Skipped),
             None => {
-                let download_id =
-                    remote.thumb_file_id.as_deref().unwrap_or(&remote.file_id);
+                let download_id = remote.thumb_file_id.as_deref().unwrap_or(&remote.file_id);
                 let file = self.gateway.download_file(download_id).await?;
                 let file_name = format!("{id}.{}", file.ext);
                 let path = self.images.save(pack_name, &file_name, &file.bytes)?;
@@ -167,7 +176,9 @@ fn file_name_of(image_path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entities::{FileData, Pack, RemoteSticker, RemoteStickerSet, Sticker, StickerFormat};
+    use crate::entities::{
+        FileData, Pack, RemoteSticker, RemoteStickerSet, Sticker, StickerFormat,
+    };
     use crate::error::{GatewayError, RepoError, StoreError};
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
@@ -191,7 +202,11 @@ mod tests {
     }
 
     fn set_with(name: &str, stickers: Vec<RemoteSticker>) -> RemoteStickerSet {
-        RemoteStickerSet { name: name.into(), title: "Title".into(), stickers }
+        RemoteStickerSet {
+            name: name.into(),
+            title: "Title".into(),
+            stickers,
+        }
     }
 
     // ---- fakes ----
@@ -204,7 +219,11 @@ mod tests {
 
     impl FakeGateway {
         fn new(sets: HashMap<String, RemoteStickerSet>) -> Self {
-            Self { sets, fail_downloads: HashSet::new(), download_calls: Cell::new(0) }
+            Self {
+                sets,
+                fail_downloads: HashSet::new(),
+                download_calls: Cell::new(0),
+            }
         }
         fn fail_download(mut self, file_id: &str) -> Self {
             self.fail_downloads.insert(file_id.into());
@@ -227,7 +246,10 @@ mod tests {
             if self.fail_downloads.contains(file_id) {
                 return Err(GatewayError::Transport("boom".into()));
             }
-            Ok(FileData { bytes: vec![1, 2, 3], ext: "webp".into() })
+            Ok(FileData {
+                bytes: vec![1, 2, 3],
+                ext: "webp".into(),
+            })
         }
     }
 
@@ -280,13 +302,17 @@ mod tests {
 
     impl FakeImages {
         fn mark(&self, pack: &str, file_name: &str) {
-            self.existing.borrow_mut().insert(format!("{pack}/{file_name}"));
+            self.existing
+                .borrow_mut()
+                .insert(format!("{pack}/{file_name}"));
         }
     }
 
     impl ImageStore for FakeImages {
         fn exists(&self, pack: &str, file_name: &str) -> bool {
-            self.existing.borrow().contains(&format!("{pack}/{file_name}"))
+            self.existing
+                .borrow()
+                .contains(&format!("{pack}/{file_name}"))
         }
         fn save(&self, pack: &str, file_name: &str, _bytes: &[u8]) -> Result<String, StoreError> {
             let path = format!("{pack}/{file_name}");
@@ -312,17 +338,31 @@ mod tests {
     async fn fresh_sticker_is_downloaded_and_persisted() {
         let mut sets = HashMap::new();
         sets.insert("packA".into(), set_with("packA", vec![remote("u1", "f1")]));
-        let app = uc(FakeGateway::new(sets), FakeRepo::default(), FakeImages::default());
+        let app = uc(
+            FakeGateway::new(sets),
+            FakeRepo::default(),
+            FakeImages::default(),
+        );
 
         let s = app.run(&["packA".into()]).await;
 
-        assert_eq!(s, ScrapeSummary { packs_ok: 1, downloaded: 1, ..Default::default() });
+        assert_eq!(
+            s,
+            ScrapeSummary {
+                packs_ok: 1,
+                downloaded: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.repo().packs.borrow().len(), 1);
         let stickers = app.repo().stickers.borrow();
         assert_eq!(stickers.len(), 1);
         assert_eq!(stickers[0].file_id, "f1");
         assert_eq!(stickers[0].position, 0);
-        assert_eq!(stickers[0].image_path, format!("packA/{}.webp", stickers[0].id));
+        assert_eq!(
+            stickers[0].image_path,
+            format!("packA/{}.webp", stickers[0].id)
+        );
     }
 
     #[tokio::test]
@@ -390,7 +430,11 @@ mod tests {
     async fn one_bad_pack_does_not_abort_the_run() {
         let mut sets = HashMap::new();
         sets.insert("good".into(), set_with("good", vec![remote("u1", "f1")]));
-        let app = uc(FakeGateway::new(sets), FakeRepo::default(), FakeImages::default());
+        let app = uc(
+            FakeGateway::new(sets),
+            FakeRepo::default(),
+            FakeImages::default(),
+        );
 
         let s = app.run(&["missing".into(), "good".into()]).await;
 

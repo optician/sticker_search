@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "infra", "scrapper", "captioner", "embedder"]
+members = ["core", "infra", "scrapper", "captioner", "embedder", "bot"]
 
 [workspace.dependencies]
 # domain

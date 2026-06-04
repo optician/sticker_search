@@ -40,7 +40,12 @@ where
     C: CaptionLookup,
 {
     pub fn new(gateway: E, store: V, stickers: S, captions: C) -> Self {
-        Self { gateway, store, stickers, captions }
+        Self {
+            gateway,
+            store,
+            stickers,
+            captions,
+        }
     }
 
     pub fn gateway(&self) -> &E {
@@ -56,10 +61,12 @@ where
     /// row is missing (index/DB drift) is skipped with a warning rather than
     /// failing the whole query.
     pub async fn search(&self, q: SearchQuery<'_>) -> Result<Vec<SearchHit>, SearchError> {
-        let collection =
-            collection_name(q.caption_model, q.prompt_version, self.gateway.model());
+        let collection = collection_name(q.caption_model, q.prompt_version, self.gateway.model());
         let vector = self.gateway.embed(q.text).await?;
-        let hits = self.store.search(&collection, &vector, q.limit, q.min_score).await?;
+        let hits = self
+            .store
+            .search(&collection, &vector, q.limit, q.min_score)
+            .await?;
 
         let mut out = Vec::with_capacity(hits.len());
         for ScoredPoint { id, score } in hits {
@@ -68,12 +75,17 @@ where
                 continue;
             };
             let Some(caption) =
-                self.captions.find_caption(id, q.caption_model, q.prompt_version)?
+                self.captions
+                    .find_caption(id, q.caption_model, q.prompt_version)?
             else {
                 tracing::warn!(sticker = %id, "search hit has no caption row; skipping");
                 continue;
             };
-            out.push(SearchHit { score, sticker, caption });
+            out.push(SearchHit {
+                score,
+                sticker,
+                caption,
+            });
         }
         Ok(out)
     }
@@ -132,7 +144,11 @@ mod tests {
 
     impl FakeGateway {
         fn new(model: &str) -> Self {
-            Self { model: model.into(), dim: 4, fail: None }
+            Self {
+                model: model.into(),
+                dim: 4,
+                fail: None,
+            }
         }
     }
 
@@ -195,8 +211,12 @@ mod tests {
             if self.fail {
                 return Err(VectorStoreError::Transport("down".into()));
             }
-            *self.last.borrow_mut() =
-                Some((collection.into(), query_vector.to_vec(), limit, score_threshold));
+            *self.last.borrow_mut() = Some((
+                collection.into(),
+                query_vector.to_vec(),
+                limit,
+                score_threshold,
+            ));
             Ok(self.ranked.clone())
         }
     }
@@ -330,7 +350,11 @@ mod tests {
             FakeCaptions::default(),
         );
 
-        let q = SearchQuery { limit: 3, min_score: Some(0.42), ..query("x") };
+        let q = SearchQuery {
+            limit: 3,
+            min_score: Some(0.42),
+            ..query("x")
+        };
         app.search(q).await.unwrap();
 
         let last = app.store().last.borrow();
@@ -345,12 +369,20 @@ mod tests {
         let orphan = Uuid::new_v4();
         let store = FakeStore {
             ranked: vec![
-                ScoredPoint { id: orphan, score: 0.9 },
-                ScoredPoint { id: present, score: 0.5 },
+                ScoredPoint {
+                    id: orphan,
+                    score: 0.9,
+                },
+                ScoredPoint {
+                    id: present,
+                    score: 0.5,
+                },
             ],
             ..Default::default()
         };
-        let stickers = FakeStickers { by_id: HashMap::from([(present, sticker(present))]) };
+        let stickers = FakeStickers {
+            by_id: HashMap::from([(present, sticker(present))]),
+        };
         let captions = FakeCaptions {
             by_id: HashMap::from([(present, caption(present, "qwen", "v1", "kept"))]),
         };
@@ -370,7 +402,9 @@ mod tests {
             ..Default::default()
         };
         // Sticker exists, but no caption for this (model, version).
-        let stickers = FakeStickers { by_id: HashMap::from([(id, sticker(id))]) };
+        let stickers = FakeStickers {
+            by_id: HashMap::from([(id, sticker(id))]),
+        };
         let app = app(
             FakeGateway::new("bge-m3"),
             store,
@@ -385,8 +419,16 @@ mod tests {
 
     #[tokio::test]
     async fn embedding_failure_aborts_the_query() {
-        let gw = FakeGateway { fail: Some("bad".into()), ..FakeGateway::new("bge-m3") };
-        let app = app(gw, FakeStore::default(), FakeStickers::default(), FakeCaptions::default());
+        let gw = FakeGateway {
+            fail: Some("bad".into()),
+            ..FakeGateway::new("bge-m3")
+        };
+        let app = app(
+            gw,
+            FakeStore::default(),
+            FakeStickers::default(),
+            FakeCaptions::default(),
+        );
 
         let err = app.search(query("bad")).await.unwrap_err();
 
@@ -395,8 +437,16 @@ mod tests {
 
     #[tokio::test]
     async fn store_failure_aborts_the_query() {
-        let store = FakeStore { fail: true, ..Default::default() };
-        let app = app(FakeGateway::new("bge-m3"), store, FakeStickers::default(), FakeCaptions::default());
+        let store = FakeStore {
+            fail: true,
+            ..Default::default()
+        };
+        let app = app(
+            FakeGateway::new("bge-m3"),
+            store,
+            FakeStickers::default(),
+            FakeCaptions::default(),
+        );
 
         let err = app.search(query("x")).await.unwrap_err();
 

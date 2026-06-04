@@ -70,7 +70,13 @@ where
     }
 
     pub fn with_clock(gateway: G, repo: R, images: S, now: fn() -> OffsetDateTime) -> Self {
-        Self { gateway, repo, images, now, report: ignore_progress }
+        Self {
+            gateway,
+            repo,
+            images,
+            now,
+            report: ignore_progress,
+        }
     }
 
     /// Install a progress hook, called once with `Start` before each sticker and
@@ -138,7 +144,9 @@ where
     fn register_prompt(&self, prompt: &Prompt) -> Result<(), CaptionError> {
         match self.repo.find_prompt(&prompt.version)? {
             Some(existing) if existing.text != prompt.text => {
-                Err(CaptionError::PromptVersionMismatch { version: prompt.version.clone() })
+                Err(CaptionError::PromptVersionMismatch {
+                    version: prompt.version.clone(),
+                })
             }
             Some(_) => Ok(()),
             None => {
@@ -155,7 +163,11 @@ where
         force: bool,
     ) -> Result<Outcome, CaptionStickerError> {
         let model = self.gateway.model();
-        if !force && self.repo.caption_exists(sticker.id, model, &prompt.version)? {
+        if !force
+            && self
+                .repo
+                .caption_exists(sticker.id, model, &prompt.version)?
+        {
             return Ok(Outcome::Skipped);
         }
 
@@ -196,7 +208,11 @@ mod tests {
     }
 
     fn prompt(version: &str, text: &str) -> Prompt {
-        Prompt { version: version.into(), text: text.into(), created_at: fixed_now() }
+        Prompt {
+            version: version.into(),
+            text: text.into(),
+            created_at: fixed_now(),
+        }
     }
 
     fn sticker(path: &str) -> Sticker {
@@ -273,7 +289,10 @@ mod tests {
 
     impl FakeRepo {
         fn with_stickers(stickers: Vec<Sticker>) -> Self {
-            Self { stickers, ..Default::default() }
+            Self {
+                stickers,
+                ..Default::default()
+            }
         }
     }
 
@@ -330,7 +349,12 @@ mod tests {
             Ok(())
         }
         fn find_prompt(&self, version: &str) -> Result<Option<Prompt>, RepoError> {
-            Ok(self.prompts.borrow().iter().find(|p| p.version == version).cloned())
+            Ok(self
+                .prompts
+                .borrow()
+                .iter()
+                .find(|p| p.version == version)
+                .cloned())
         }
         fn upsert_prompt(&self, prompt: &Prompt) -> Result<(), RepoError> {
             let mut v = self.prompts.borrow_mut();
@@ -368,9 +392,18 @@ mod tests {
         let id = s.id;
         let app = uc(FakeGateway::new("qwen"), FakeRepo::with_stickers(vec![s]));
 
-        let summary = app.run(&prompt("v1", "describe"), CaptionRun::default()).await.unwrap();
+        let summary = app
+            .run(&prompt("v1", "describe"), CaptionRun::default())
+            .await
+            .unwrap();
 
-        assert_eq!(summary, CaptionSummary { captioned: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                captioned: 1,
+                ..Default::default()
+            }
+        );
         let caps = app.repo().captions.borrow();
         assert_eq!(caps.len(), 1);
         let c = &caps[0];
@@ -404,11 +437,24 @@ mod tests {
         .unwrap();
         let app = uc(FakeGateway::new("qwen"), repo);
 
-        let summary = app.run(&prompt("v1", "describe"), CaptionRun::default()).await.unwrap();
+        let summary = app
+            .run(&prompt("v1", "describe"), CaptionRun::default())
+            .await
+            .unwrap();
 
-        assert_eq!(summary, CaptionSummary { skipped: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                skipped: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.gateway().calls(), 0, "skip avoids the model call");
-        assert_eq!(app.repo().captions.borrow()[0].scene, "old", "not overwritten");
+        assert_eq!(
+            app.repo().captions.borrow()[0].scene,
+            "old",
+            "not overwritten"
+        );
     }
 
     #[tokio::test]
@@ -429,12 +475,25 @@ mod tests {
         .unwrap();
         let app = uc(FakeGateway::new("qwen"), repo);
 
-        let cfg = CaptionRun { force: true, ..Default::default() };
+        let cfg = CaptionRun {
+            force: true,
+            ..Default::default()
+        };
         let summary = app.run(&prompt("v1", "describe"), cfg).await.unwrap();
 
-        assert_eq!(summary, CaptionSummary { captioned: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                captioned: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.gateway().calls(), 1);
-        assert_eq!(app.repo().captions.borrow()[0].scene, "packA/a.png", "overwritten");
+        assert_eq!(
+            app.repo().captions.borrow()[0].scene,
+            "packA/a.png",
+            "overwritten"
+        );
     }
 
     #[tokio::test]
@@ -455,10 +514,23 @@ mod tests {
         .unwrap();
         let app = uc(FakeGateway::new("qwen"), repo);
 
-        let summary = app.run(&prompt("v1", "describe"), CaptionRun::default()).await.unwrap();
+        let summary = app
+            .run(&prompt("v1", "describe"), CaptionRun::default())
+            .await
+            .unwrap();
 
-        assert_eq!(summary, CaptionSummary { captioned: 1, ..Default::default() });
-        assert_eq!(app.repo().captions.borrow().len(), 2, "both models' rows kept");
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                captioned: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            app.repo().captions.borrow().len(),
+            2,
+            "both models' rows kept"
+        );
     }
 
     #[tokio::test]
@@ -468,9 +540,19 @@ mod tests {
         let gw = FakeGateway::new("qwen").fail_on_bytes(b"packA/bad.png");
         let app = uc(gw, FakeRepo::with_stickers(vec![good, bad]));
 
-        let summary = app.run(&prompt("v1", "describe"), CaptionRun::default()).await.unwrap();
+        let summary = app
+            .run(&prompt("v1", "describe"), CaptionRun::default())
+            .await
+            .unwrap();
 
-        assert_eq!(summary, CaptionSummary { captioned: 1, failed: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                captioned: 1,
+                failed: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.repo().captions.borrow().len(), 1);
     }
 
@@ -481,7 +563,10 @@ mod tests {
         repo.upsert_prompt(&prompt("v1", "ORIGINAL")).unwrap();
         let app = uc(FakeGateway::new("qwen"), repo);
 
-        let err = app.run(&prompt("v1", "EDITED"), CaptionRun::default()).await.unwrap_err();
+        let err = app
+            .run(&prompt("v1", "EDITED"), CaptionRun::default())
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, CaptionError::PromptVersionMismatch { version } if version == "v1"));
         assert_eq!(app.gateway().calls(), 0);
@@ -510,7 +595,9 @@ mod tests {
         let app = uc(FakeGateway::new("qwen"), FakeRepo::with_stickers(stickers))
             .on_progress(count_events);
 
-        app.run(&prompt("v1", "describe"), CaptionRun::default()).await.unwrap();
+        app.run(&prompt("v1", "describe"), CaptionRun::default())
+            .await
+            .unwrap();
 
         assert_eq!(STARTS.load(Ordering::SeqCst), 3, "one Start per sticker");
         assert_eq!(DONES.load(Ordering::SeqCst), 3, "one outcome per sticker");
@@ -521,9 +608,18 @@ mod tests {
         let stickers = vec![sticker("a.png"), sticker("b.png"), sticker("c.png")];
         let app = uc(FakeGateway::new("qwen"), FakeRepo::with_stickers(stickers));
 
-        let cfg = CaptionRun { limit: Some(1), ..Default::default() };
+        let cfg = CaptionRun {
+            limit: Some(1),
+            ..Default::default()
+        };
         let summary = app.run(&prompt("v1", "describe"), cfg).await.unwrap();
 
-        assert_eq!(summary, CaptionSummary { captioned: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            CaptionSummary {
+                captioned: 1,
+                ..Default::default()
+            }
+        );
     }
 }

@@ -2,8 +2,8 @@
 //! implement these; tests use in-memory fakes.
 
 use crate::entities::{
-    Caption, CaptionResult, DistanceMetric, FileData, Pack, Prompt, RemoteStickerSet, ScoredPoint,
-    Sticker, VectorPoint,
+    Caption, CaptionResult, DistanceMetric, FileData, Pack, PackRequest, Prompt, RemoteStickerSet,
+    ScoredPoint, Sticker, VectorPoint,
 };
 use crate::error::{
     CaptionGatewayError, EmbeddingGatewayError, GatewayError, RepoError, StoreError,
@@ -27,7 +27,7 @@ pub trait StickerRepository {
     fn find_pack_by_name(&self, name: &str) -> Result<Option<Pack>, RepoError>;
     fn upsert_pack(&self, pack: &Pack) -> Result<(), RepoError>;
     fn find_sticker_by_unique_id(&self, file_unique_id: &str)
-        -> Result<Option<Sticker>, RepoError>;
+    -> Result<Option<Sticker>, RepoError>;
     /// Look up a sticker by its UUID. Drives the query read path, which resolves
     /// vector-store hits (keyed by UUID) back to displayable stickers.
     fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError>;
@@ -35,6 +35,24 @@ pub trait StickerRepository {
     /// All stickers, optionally restricted to a single pack name, ordered by
     /// pack then position. Drives the captioning batch.
     fn list_stickers(&self, pack: Option<&str>) -> Result<Vec<Sticker>, RepoError>;
+}
+
+/// The bot's pack-request queue. Sync, like `StickerRepository` (rusqlite owns
+/// the interior mutability). The queue is append-only metadata; pipeline progress
+/// is never stored here — it's derived from `PackStatus`.
+pub trait PackRequests {
+    /// Record a request for `name` by `requested_by` at `at`. Idempotent on
+    /// `name`: a repeat request for an already-queued pack is a no-op (the first
+    /// requester/time is kept), so re-running `/add` is safe.
+    fn enqueue(
+        &self,
+        name: &str,
+        requested_by: i64,
+        at: time::OffsetDateTime,
+    ) -> Result<(), RepoError>;
+    /// Every requested pack name, oldest request first. Drives the scraper's
+    /// `--from-queue` drain.
+    fn list_requests(&self) -> Result<Vec<PackRequest>, RepoError>;
 }
 
 /// Storage of the downloaded thumbnail images on disk.
@@ -79,11 +97,7 @@ pub trait CaptionRepository {
 /// `(model, prompt_version)`, in a stable order. Narrow on purpose — the
 /// embedding use-case has no business with prompts or writes.
 pub trait CaptionReader {
-    fn list_captions(
-        &self,
-        model: &str,
-        prompt_version: &str,
-    ) -> Result<Vec<Caption>, RepoError>;
+    fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError>;
 }
 
 /// Read side feeding the query path: the single caption behind a vector hit.
@@ -124,14 +138,9 @@ pub trait VectorStore {
         metric: DistanceMetric,
     ) -> Result<(), VectorStoreError>;
     /// Whether a point with `point_id` already exists in `collection`.
-    async fn has_vector(
-        &self,
-        collection: &str,
-        point_id: Uuid,
-    ) -> Result<bool, VectorStoreError>;
+    async fn has_vector(&self, collection: &str, point_id: Uuid) -> Result<bool, VectorStoreError>;
     /// Insert or overwrite a point.
-    async fn upsert(&self, collection: &str, point: &VectorPoint)
-        -> Result<(), VectorStoreError>;
+    async fn upsert(&self, collection: &str, point: &VectorPoint) -> Result<(), VectorStoreError>;
     /// Search `collection` for the `limit` nearest points to `query_vector`,
     /// ranked best-first. `score_threshold` (when set) drops hits scoring below
     /// it. `query_vector` must have the collection's dimensionality.

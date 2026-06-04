@@ -23,7 +23,10 @@ impl QdrantVectorStore {
             .timeout(timeout)
             .build()
             .map_err(|e| VectorStoreError::Transport(e.to_string()))?;
-        Ok(Self { client, base_url: base_url.into().trim_end_matches('/').to_string() })
+        Ok(Self {
+            client,
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+        })
     }
 
     async fn get(&self, path: &str) -> Result<reqwest::Response, VectorStoreError> {
@@ -100,14 +103,20 @@ fn parse_search_results(body: &Value) -> Result<Vec<ScoredPoint>, VectorStoreErr
             let score = item.get("score")?.as_f64()? as f32;
             let id = match Uuid::parse_str(id_str) {
                 Ok(id) => id,
-                Err(e) => return Some(Err(VectorStoreError::Parse(format!("point id {id_str:?}: {e}")))),
+                Err(e) => {
+                    return Some(Err(VectorStoreError::Parse(format!(
+                        "point id {id_str:?}: {e}"
+                    ))));
+                }
             };
             out.push(ScoredPoint { id, score });
         }
         Some(Ok(out))
     };
     parse().unwrap_or_else(|| {
-        Err(VectorStoreError::Parse(format!("unexpected search response shape: {body}")))
+        Err(VectorStoreError::Parse(format!(
+            "unexpected search response shape: {body}"
+        )))
     })
 }
 
@@ -134,12 +143,10 @@ impl VectorStore for QdrantVectorStore {
         check_success(resp).await.map(|_| ())
     }
 
-    async fn has_vector(
-        &self,
-        collection: &str,
-        point_id: Uuid,
-    ) -> Result<bool, VectorStoreError> {
-        let resp = self.get(&format!("/collections/{collection}/points/{point_id}")).await?;
+    async fn has_vector(&self, collection: &str, point_id: Uuid) -> Result<bool, VectorStoreError> {
+        let resp = self
+            .get(&format!("/collections/{collection}/points/{point_id}"))
+            .await?;
         match resp.status().as_u16() {
             200 => Ok(true),
             404 => Ok(false),
@@ -147,14 +154,13 @@ impl VectorStore for QdrantVectorStore {
         }
     }
 
-    async fn upsert(
-        &self,
-        collection: &str,
-        point: &VectorPoint,
-    ) -> Result<(), VectorStoreError> {
+    async fn upsert(&self, collection: &str, point: &VectorPoint) -> Result<(), VectorStoreError> {
         let resp = self
             .client
-            .put(format!("{}/collections/{}/points?wait=true", self.base_url, collection))
+            .put(format!(
+                "{}/collections/{}/points?wait=true",
+                self.base_url, collection
+            ))
             .json(&upsert_body(point))
             .send()
             .await
@@ -171,13 +177,19 @@ impl VectorStore for QdrantVectorStore {
     ) -> Result<Vec<ScoredPoint>, VectorStoreError> {
         let resp = self
             .client
-            .post(format!("{}/collections/{}/points/search", self.base_url, collection))
+            .post(format!(
+                "{}/collections/{}/points/search",
+                self.base_url, collection
+            ))
             .json(&search_body(query_vector, limit, score_threshold))
             .send()
             .await
             .map_err(transport)?;
         let resp = check_success(resp).await?;
-        let body: Value = resp.json().await.map_err(|e| VectorStoreError::Parse(e.to_string()))?;
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| VectorStoreError::Parse(e.to_string()))?;
         parse_search_results(&body)
     }
 }
@@ -187,7 +199,10 @@ async fn check_success(resp: reqwest::Response) -> Result<reqwest::Response, Vec
     if status.is_success() {
         Ok(resp)
     } else {
-        Err(VectorStoreError::HttpStatus(status.as_u16(), body_text(resp).await))
+        Err(VectorStoreError::HttpStatus(
+            status.as_u16(),
+            body_text(resp).await,
+        ))
     }
 }
 
@@ -220,7 +235,10 @@ mod tests {
         assert_eq!(body["vector"].as_array().unwrap().len(), 2);
         assert_eq!(body["limit"], 5);
         assert_eq!(body["with_payload"], false);
-        assert!(body.get("score_threshold").is_none(), "no threshold key when None");
+        assert!(
+            body.get("score_threshold").is_none(),
+            "no threshold key when None"
+        );
     }
 
     #[test]
@@ -256,13 +274,19 @@ mod tests {
     #[test]
     fn parse_search_results_bad_id_is_a_parse_error() {
         let body = json!({ "result": [ { "id": "not-a-uuid", "score": 0.5 } ] });
-        assert!(matches!(parse_search_results(&body), Err(VectorStoreError::Parse(_))));
+        assert!(matches!(
+            parse_search_results(&body),
+            Err(VectorStoreError::Parse(_))
+        ));
     }
 
     #[test]
     fn parse_search_results_missing_result_key_is_a_parse_error() {
         let body = json!({ "status": "ok" });
-        assert!(matches!(parse_search_results(&body), Err(VectorStoreError::Parse(_))));
+        assert!(matches!(
+            parse_search_results(&body),
+            Err(VectorStoreError::Parse(_))
+        ));
     }
 
     #[test]

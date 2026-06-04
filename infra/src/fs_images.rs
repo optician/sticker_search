@@ -1,9 +1,9 @@
 //! Filesystem-backed `ImageStore`. Lays out files as `<root>/<pack>/<file_name>`
 //! and returns the `<pack>/<file_name>` path for `Sticker::image_path`.
 
+use std::path::PathBuf;
 use sticker_core::error::StoreError;
 use sticker_core::ports::ImageStore;
-use std::path::PathBuf;
 
 pub struct FsImageStore {
     root: PathBuf,

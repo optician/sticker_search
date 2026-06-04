@@ -52,7 +52,13 @@ fn ignore_progress(_: EmbedProgress) {}
 /// deterministic, legal collection name.
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -82,7 +88,12 @@ where
     V: VectorStore,
 {
     pub fn new(gateway: G, captions: R, store: V) -> Self {
-        Self { gateway, captions, store, report: ignore_progress }
+        Self {
+            gateway,
+            captions,
+            store,
+            report: ignore_progress,
+        }
     }
 
     pub fn on_progress(mut self, report: fn(EmbedProgress)) -> Self {
@@ -102,8 +113,11 @@ where
     /// (listing captions, creating the collection) abort and surface as `Err`;
     /// per-sticker failures are logged and counted into the summary.
     pub async fn run(&self, cfg: EmbedRun<'_>) -> Result<EmbedSummary, EmbedError> {
-        let captions = self.captions.list_captions(cfg.caption_model, cfg.prompt_version)?;
-        let collection = collection_name(cfg.caption_model, cfg.prompt_version, self.gateway.model());
+        let captions = self
+            .captions
+            .list_captions(cfg.caption_model, cfg.prompt_version)?;
+        let collection =
+            collection_name(cfg.caption_model, cfg.prompt_version, self.gateway.model());
         self.store
             .ensure_collection(&collection, self.gateway.dim(), DistanceMetric::Cosine)
             .await?;
@@ -154,7 +168,10 @@ where
         let vector = self.gateway.embed(&caption.embed_text()).await?;
         let expected = self.gateway.dim();
         if vector.len() != expected {
-            return Err(EmbedStickerError::DimensionMismatch { expected, got: vector.len() });
+            return Err(EmbedStickerError::DimensionMismatch {
+                expected,
+                got: vector.len(),
+            });
         }
 
         let point = VectorPoint {
@@ -283,7 +300,9 @@ mod tests {
             metric: DistanceMetric,
         ) -> Result<(), VectorStoreError> {
             self.ensure_calls.set(self.ensure_calls.get() + 1);
-            self.collections.borrow_mut().insert(collection.into(), (dim, metric));
+            self.collections
+                .borrow_mut()
+                .insert(collection.into(), (dim, metric));
             Ok(())
         }
         async fn has_vector(
@@ -291,7 +310,10 @@ mod tests {
             collection: &str,
             point_id: Uuid,
         ) -> Result<bool, VectorStoreError> {
-            Ok(self.points.borrow().contains_key(&(collection.into(), point_id)))
+            Ok(self
+                .points
+                .borrow()
+                .contains_key(&(collection.into(), point_id)))
         }
         async fn upsert(
             &self,
@@ -301,7 +323,9 @@ mod tests {
             if self.fail_upsert {
                 return Err(VectorStoreError::Transport("down".into()));
             }
-            self.points.borrow_mut().insert((collection.into(), point.id), point.clone());
+            self.points
+                .borrow_mut()
+                .insert((collection.into(), point.id), point.clone());
             Ok(())
         }
         async fn search(
@@ -317,7 +341,12 @@ mod tests {
     }
 
     fn run_cfg<'a>() -> EmbedRun<'a> {
-        EmbedRun { caption_model: "qwen", prompt_version: "v1", force: false, limit: None }
+        EmbedRun {
+            caption_model: "qwen",
+            prompt_version: "v1",
+            force: false,
+            limit: None,
+        }
     }
 
     fn app(
@@ -342,11 +371,21 @@ mod tests {
     async fn fresh_caption_is_embedded_and_stored_with_provenance() {
         let id = Uuid::new_v4();
         let store = FakeStore::default();
-        let app = app(FakeGateway::new("bge-m3", 4), vec![caption(id, "qwen", "v1", "a cat")], store);
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![caption(id, "qwen", "v1", "a cat")],
+            store,
+        );
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { embedded: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                embedded: 1,
+                ..Default::default()
+            }
+        );
         let coll = collection_name("qwen", "v1", "bge-m3");
         let points = app.store().points.borrow();
         let p = points.get(&(coll.clone(), id)).expect("point stored");
@@ -385,11 +424,21 @@ mod tests {
                 },
             },
         );
-        let app = app(FakeGateway::new("bge-m3", 4), vec![caption(id, "qwen", "v1", "a cat")], store);
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![caption(id, "qwen", "v1", "a cat")],
+            store,
+        );
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { skipped: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                skipped: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.gateway().calls(), 0, "skip avoids the model call");
     }
 
@@ -411,12 +460,25 @@ mod tests {
                 },
             },
         );
-        let app = app(FakeGateway::new("bge-m3", 4), vec![caption(id, "qwen", "v1", "a cat")], store);
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![caption(id, "qwen", "v1", "a cat")],
+            store,
+        );
 
-        let cfg = EmbedRun { force: true, ..run_cfg() };
+        let cfg = EmbedRun {
+            force: true,
+            ..run_cfg()
+        };
         let summary = app.run(cfg).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { embedded: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                embedded: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.gateway().calls(), 1);
     }
 
@@ -425,11 +487,21 @@ mod tests {
         let a = caption(Uuid::new_v4(), "qwen", "v1", "match");
         let other_model = caption(Uuid::new_v4(), "llava", "v1", "skip");
         let other_ver = caption(Uuid::new_v4(), "qwen", "v2", "skip");
-        let app = app(FakeGateway::new("bge-m3", 4), vec![a, other_model, other_ver], FakeStore::default());
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![a, other_model, other_ver],
+            FakeStore::default(),
+        );
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { embedded: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                embedded: 1,
+                ..Default::default()
+            }
+        );
     }
 
     #[tokio::test]
@@ -441,7 +513,14 @@ mod tests {
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { embedded: 1, failed: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                embedded: 1,
+                failed: 1,
+                ..Default::default()
+            }
+        );
         assert_eq!(app.store().points.borrow().len(), 1);
     }
 
@@ -450,11 +529,21 @@ mod tests {
         let id = Uuid::new_v4();
         let mut gw = FakeGateway::new("bge-m3", 4);
         gw.bad_len = Some(3); // model returns 3 dims, collection expects 4
-        let app = app(gw, vec![caption(id, "qwen", "v1", "a cat")], FakeStore::default());
+        let app = app(
+            gw,
+            vec![caption(id, "qwen", "v1", "a cat")],
+            FakeStore::default(),
+        );
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { failed: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                failed: 1,
+                ..Default::default()
+            }
+        );
         assert!(app.store().points.borrow().is_empty(), "nothing stored");
     }
 
@@ -467,21 +556,43 @@ mod tests {
         ];
         let app = app(FakeGateway::new("bge-m3", 4), rows, FakeStore::default());
 
-        let cfg = EmbedRun { limit: Some(1), ..run_cfg() };
+        let cfg = EmbedRun {
+            limit: Some(1),
+            ..run_cfg()
+        };
         let summary = app.run(cfg).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { embedded: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                embedded: 1,
+                ..Default::default()
+            }
+        );
     }
 
     #[tokio::test]
     async fn upsert_failure_aborts_run_setup_is_fine() {
         // A store whose upsert fails turns each sticker into a counted failure,
         // not a run-level abort.
-        let store = FakeStore { fail_upsert: true, ..Default::default() };
-        let app = app(FakeGateway::new("bge-m3", 4), vec![caption(Uuid::new_v4(), "qwen", "v1", "x")], store);
+        let store = FakeStore {
+            fail_upsert: true,
+            ..Default::default()
+        };
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![caption(Uuid::new_v4(), "qwen", "v1", "x")],
+            store,
+        );
 
         let summary = app.run(run_cfg()).await.unwrap();
 
-        assert_eq!(summary, EmbedSummary { failed: 1, ..Default::default() });
+        assert_eq!(
+            summary,
+            EmbedSummary {
+                failed: 1,
+                ..Default::default()
+            }
+        );
     }
 }

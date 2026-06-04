@@ -1,9 +1,12 @@
 //! SQLite-backed `StickerRepository` (rusqlite, bundled).
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use sticker_core::entities::{Caption, Pack, Prompt, Sticker, StickerFormat};
+use std::sync::{Mutex, MutexGuard};
+use sticker_core::entities::{Caption, Pack, PackRequest, Prompt, Sticker, StickerFormat};
 use sticker_core::error::RepoError;
-use sticker_core::ports::{CaptionLookup, CaptionReader, CaptionRepository, StickerRepository};
+use sticker_core::ports::{
+    CaptionLookup, CaptionReader, CaptionRepository, PackRequests, StickerRepository,
+};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -45,10 +48,20 @@ CREATE TABLE IF NOT EXISTS captions (
   created_at     TEXT NOT NULL,
   PRIMARY KEY (sticker_id, model, prompt_version)
 );
+CREATE TABLE IF NOT EXISTS pack_requests (
+  name         TEXT PRIMARY KEY,
+  requested_by INTEGER NOT NULL,
+  requested_at TEXT NOT NULL
+);
 "#;
 
+/// rusqlite's `Connection` is `Send` but `!Sync`. The live bot drives the async
+/// query path on a multi-threaded runtime, where handler futures must be `Send`
+/// and hold `&SqliteRepository` across `.await` — which needs the repository to be
+/// `Sync`. A `Mutex` around the connection provides that; the bot is low-traffic,
+/// so lock contention is a non-issue.
 pub struct SqliteRepository {
-    conn: Connection,
+    db: Mutex<Connection>,
 }
 
 impl SqliteRepository {
@@ -64,7 +77,15 @@ impl SqliteRepository {
 
     fn init(conn: Connection) -> Result<Self, RepoError> {
         conn.execute_batch(SCHEMA).map_err(storage)?;
-        Ok(Self { conn })
+        Ok(Self {
+            db: Mutex::new(conn),
+        })
+    }
+
+    /// Lock the connection. A poisoned lock (a previous holder panicked) becomes a
+    /// storage error rather than a panic, honoring the crate's no-panic rule.
+    fn lock(&self) -> Result<MutexGuard<'_, Connection>, RepoError> {
+        self.db.lock().map_err(storage)
     }
 }
 
@@ -93,8 +114,19 @@ fn parse_time(s: &str) -> Result<OffsetDateTime, RepoError> {
 }
 
 /// The 11 sticker columns, in `SELECT` order, as raw SQL types.
-type StickerCols =
-    (String, String, String, String, Option<String>, String, u32, u32, u32, String, String);
+type StickerCols = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    u32,
+    u32,
+    u32,
+    String,
+    String,
+);
 
 /// Sticker columns, `s.`-qualified so they're unambiguous when joined to `packs`.
 /// Every query that selects them aliases the table as `s`.
@@ -138,7 +170,17 @@ fn build_sticker(c: StickerCols) -> Result<Sticker, RepoError> {
 const CAPTION_SELECT: &str = "c.sticker_id, c.model, c.prompt_version, c.scene, c.on_image_text,
                               c.tone, c.situations, c.raw, c.created_at";
 
-type CaptionCols = (String, String, String, String, String, String, String, String, String);
+type CaptionCols = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
 
 fn caption_cols(r: &Row) -> rusqlite::Result<CaptionCols> {
     Ok((
@@ -171,7 +213,7 @@ fn build_caption(c: CaptionCols) -> Result<Caption, RepoError> {
 impl StickerRepository for SqliteRepository {
     fn find_pack_by_name(&self, name: &str) -> Result<Option<Pack>, RepoError> {
         let row: Option<(String, String, String, String)> = self
-            .conn
+            .lock()?
             .query_row(
                 "SELECT id, name, title, fetched_at FROM packs WHERE name = ?1",
                 params![name],
@@ -192,14 +234,19 @@ impl StickerRepository for SqliteRepository {
     }
 
     fn upsert_pack(&self, pack: &Pack) -> Result<(), RepoError> {
-        self.conn
+        self.lock()?
             .execute(
                 "INSERT INTO packs (id, name, title, fetched_at)
                  VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(name) DO UPDATE SET
                    title = excluded.title,
                    fetched_at = excluded.fetched_at",
-                params![pack.id.to_string(), pack.name, pack.title, rfc3339(pack.fetched_at)?],
+                params![
+                    pack.id.to_string(),
+                    pack.name,
+                    pack.title,
+                    rfc3339(pack.fetched_at)?
+                ],
             )
             .map_err(storage)?;
         Ok(())
@@ -207,7 +254,7 @@ impl StickerRepository for SqliteRepository {
 
     fn find_sticker_by_unique_id(&self, uid: &str) -> Result<Option<Sticker>, RepoError> {
         let row = self
-            .conn
+            .lock()?
             .query_row(
                 &format!("SELECT {STICKER_SELECT} FROM stickers s WHERE s.file_unique_id = ?1"),
                 params![uid],
@@ -221,7 +268,7 @@ impl StickerRepository for SqliteRepository {
 
     fn find_sticker_by_id(&self, id: Uuid) -> Result<Option<Sticker>, RepoError> {
         let row = self
-            .conn
+            .lock()?
             .query_row(
                 &format!("SELECT {STICKER_SELECT} FROM stickers s WHERE s.id = ?1"),
                 params![id.to_string()],
@@ -244,7 +291,8 @@ impl StickerRepository for SqliteRepository {
                 format!("SELECT {STICKER_SELECT} FROM stickers s ORDER BY s.pack_id, s.position")
             }
         };
-        let mut stmt = self.conn.prepare(&sql).map_err(storage)?;
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(&sql).map_err(storage)?;
         let rows = match pack {
             Some(name) => stmt.query_map(params![name], sticker_cols),
             None => stmt.query_map([], sticker_cols),
@@ -259,7 +307,7 @@ impl StickerRepository for SqliteRepository {
     }
 
     fn upsert_sticker(&self, s: &Sticker) -> Result<(), RepoError> {
-        self.conn
+        self.lock()?
             .execute(
                 "INSERT INTO stickers
                    (id, pack_id, file_unique_id, file_id, emoji, format,
@@ -300,7 +348,7 @@ impl CaptionRepository for SqliteRepository {
         prompt_version: &str,
     ) -> Result<bool, RepoError> {
         let found: Option<i64> = self
-            .conn
+            .lock()?
             .query_row(
                 "SELECT 1 FROM captions
                  WHERE sticker_id = ?1 AND model = ?2 AND prompt_version = ?3",
@@ -314,7 +362,7 @@ impl CaptionRepository for SqliteRepository {
 
     fn upsert_caption(&self, c: &Caption) -> Result<(), RepoError> {
         let situations = serde_json::to_string(&c.situations).map_err(storage)?;
-        self.conn
+        self.lock()?
             .execute(
                 "INSERT INTO captions
                    (sticker_id, model, prompt_version, scene, on_image_text,
@@ -345,7 +393,7 @@ impl CaptionRepository for SqliteRepository {
 
     fn find_prompt(&self, version: &str) -> Result<Option<Prompt>, RepoError> {
         let row: Option<(String, String, String)> = self
-            .conn
+            .lock()?
             .query_row(
                 "SELECT version, text, created_at FROM prompts WHERE version = ?1",
                 params![version],
@@ -355,7 +403,11 @@ impl CaptionRepository for SqliteRepository {
             .map_err(storage)?;
 
         row.map(|(version, text, created_at)| {
-            Ok(Prompt { version, text, created_at: parse_time(&created_at)? })
+            Ok(Prompt {
+                version,
+                text,
+                created_at: parse_time(&created_at)?,
+            })
         })
         .transpose()
     }
@@ -363,7 +415,7 @@ impl CaptionRepository for SqliteRepository {
     fn upsert_prompt(&self, p: &Prompt) -> Result<(), RepoError> {
         // First sighting wins: the use-case guards against version/text drift, so
         // an existing version keeps its original text and created_at.
-        self.conn
+        self.lock()?
             .execute(
                 "INSERT INTO prompts (version, text, created_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT(version) DO NOTHING",
@@ -376,8 +428,8 @@ impl CaptionRepository for SqliteRepository {
 
 impl CaptionReader for SqliteRepository {
     fn list_captions(&self, model: &str, prompt_version: &str) -> Result<Vec<Caption>, RepoError> {
-        let mut stmt = self
-            .conn
+        let conn = self.lock()?;
+        let mut stmt = conn
             .prepare(&format!(
                 "SELECT {CAPTION_SELECT}
                  FROM captions c
@@ -406,7 +458,7 @@ impl CaptionLookup for SqliteRepository {
         prompt_version: &str,
     ) -> Result<Option<Caption>, RepoError> {
         let row = self
-            .conn
+            .lock()?
             .query_row(
                 &format!(
                     "SELECT {CAPTION_SELECT} FROM captions c
@@ -419,6 +471,50 @@ impl CaptionLookup for SqliteRepository {
             .map_err(storage)?;
 
         row.map(build_caption).transpose()
+    }
+}
+
+impl PackRequests for SqliteRepository {
+    fn enqueue(&self, name: &str, requested_by: i64, at: OffsetDateTime) -> Result<(), RepoError> {
+        // First request for a name wins; a repeat `/add` is a no-op.
+        self.lock()?
+            .execute(
+                "INSERT INTO pack_requests (name, requested_by, requested_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(name) DO NOTHING",
+                params![name, requested_by, rfc3339(at)?],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    fn list_requests(&self) -> Result<Vec<PackRequest>, RepoError> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, requested_by, requested_at
+                 FROM pack_requests ORDER BY requested_at, name",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(storage)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (name, requested_by, requested_at) = row.map_err(storage)?;
+            out.push(PackRequest {
+                name,
+                requested_by,
+                requested_at: parse_time(&requested_at)?,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -478,8 +574,8 @@ pub struct CaptionFilter {
 /// not the captioning use-case.
 impl SqliteRepository {
     pub fn caption_stats(&self) -> Result<Vec<CaptionStat>, RepoError> {
-        let mut stmt = self
-            .conn
+        let conn = self.lock()?;
+        let mut stmt = conn
             .prepare(
                 "SELECT model, prompt_version, COUNT(*)
                  FROM captions GROUP BY model, prompt_version
@@ -500,8 +596,8 @@ impl SqliteRepository {
 
     /// Distinct pack names that have at least one caption (for filter menus).
     pub fn caption_packs(&self) -> Result<Vec<String>, RepoError> {
-        let mut stmt = self
-            .conn
+        let conn = self.lock()?;
+        let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT p.name
                  FROM captions c
@@ -510,24 +606,34 @@ impl SqliteRepository {
                  ORDER BY p.name",
             )
             .map_err(storage)?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(storage)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(storage)
     }
 
     pub fn list_prompts(&self) -> Result<Vec<Prompt>, RepoError> {
-        let mut stmt = self
-            .conn
+        let conn = self.lock()?;
+        let mut stmt = conn
             .prepare("SELECT version, text, created_at FROM prompts ORDER BY version")
             .map_err(storage)?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })
             .map_err(storage)?;
         let mut out = Vec::new();
         for row in rows {
             let (version, text, created_at) = row.map_err(storage)?;
-            out.push(Prompt { version, text, created_at: parse_time(&created_at)? });
+            out.push(Prompt {
+                version,
+                text,
+                created_at: parse_time(&created_at)?,
+            });
         }
         Ok(out)
     }
@@ -575,7 +681,8 @@ impl SqliteRepository {
             args.push(Box::new(n as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(storage)?;
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(&sql).map_err(storage)?;
         let param_refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
             .query_map(rusqlite::params_from_iter(param_refs), |r| {
@@ -676,7 +783,9 @@ mod tests {
         assert_eq!(got.file_id, "new", "mutable field refreshed");
 
         let count: u32 = repo
-            .conn
+            .db
+            .lock()
+            .unwrap()
             .query_row("SELECT COUNT(*) FROM stickers", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1, "no duplicate row");
@@ -717,7 +826,11 @@ mod tests {
         let repo = SqliteRepository::open_in_memory().unwrap();
         let a = pack();
         repo.upsert_pack(&a).unwrap();
-        let b = Pack { id: Uuid::new_v4(), name: "packB".into(), ..a.clone() };
+        let b = Pack {
+            id: Uuid::new_v4(),
+            name: "packB".into(),
+            ..a.clone()
+        };
         repo.upsert_pack(&b).unwrap();
         repo.upsert_sticker(&sticker_n(a.id, 1)).unwrap();
         repo.upsert_sticker(&sticker_n(a.id, 0)).unwrap();
@@ -761,7 +874,9 @@ mod tests {
         updated.scene = "new-scene".into();
         repo.upsert_caption(&updated).unwrap();
         let (count, scene): (u32, String) = repo
-            .conn
+            .db
+            .lock()
+            .unwrap()
             .query_row(
                 "SELECT COUNT(*), MAX(scene) FROM captions WHERE sticker_id = ?1",
                 params![s.id.to_string()],
@@ -828,8 +943,16 @@ mod tests {
         assert_eq!(
             stats,
             vec![
-                CaptionStat { model: "llava".into(), prompt_version: "v1".into(), count: 1 },
-                CaptionStat { model: "qwen".into(), prompt_version: "v1".into(), count: 2 },
+                CaptionStat {
+                    model: "llava".into(),
+                    prompt_version: "v1".into(),
+                    count: 1
+                },
+                CaptionStat {
+                    model: "qwen".into(),
+                    prompt_version: "v1".into(),
+                    count: 2
+                },
             ]
         );
     }
@@ -839,14 +962,25 @@ mod tests {
         let repo = seeded();
 
         // No filter: every caption row.
-        assert_eq!(repo.query_captions(&CaptionFilter::default()).unwrap().len(), 3);
+        assert_eq!(
+            repo.query_captions(&CaptionFilter::default())
+                .unwrap()
+                .len(),
+            3
+        );
 
         // By model.
-        let qwen = CaptionFilter { model: Some("qwen".into()), ..Default::default() };
+        let qwen = CaptionFilter {
+            model: Some("qwen".into()),
+            ..Default::default()
+        };
         assert_eq!(repo.query_captions(&qwen).unwrap().len(), 2);
 
         // Text search hits the one scene mentioning "chicken".
-        let chicken = CaptionFilter { text: Some("chicken".into()), ..Default::default() };
+        let chicken = CaptionFilter {
+            text: Some("chicken".into()),
+            ..Default::default()
+        };
         let hits = repo.query_captions(&chicken).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].pack, "packA");
@@ -854,14 +988,23 @@ mod tests {
         assert_eq!(hits[0].situations, vec!["a".to_string(), "b".to_string()]);
 
         // Limit caps results.
-        let one = CaptionFilter { limit: Some(1), ..Default::default() };
+        let one = CaptionFilter {
+            limit: Some(1),
+            ..Default::default()
+        };
         assert_eq!(repo.query_captions(&one).unwrap().len(), 1);
     }
 
     #[test]
     fn list_prompts_returns_all_versions() {
         let prompts = seeded().list_prompts().unwrap();
-        assert_eq!(prompts.iter().map(|p| p.version.as_str()).collect::<Vec<_>>(), ["v1", "v2"]);
+        assert_eq!(
+            prompts
+                .iter()
+                .map(|p| p.version.as_str())
+                .collect::<Vec<_>>(),
+            ["v1", "v2"]
+        );
     }
 
     #[test]
@@ -875,7 +1018,10 @@ mod tests {
         // qwen/v1 captioned s0 (position 0) and s1 (position 1); llava/v1 only s0.
         let qwen = repo.list_captions("qwen", "v1").unwrap();
         assert_eq!(qwen.len(), 2);
-        assert!(qwen.iter().all(|c| c.model == "qwen" && c.prompt_version == "v1"));
+        assert!(
+            qwen.iter()
+                .all(|c| c.model == "qwen" && c.prompt_version == "v1")
+        );
         assert_eq!(qwen[0].scene, "a chicken on a pan", "s0 (position 0) first");
 
         assert_eq!(repo.list_captions("llava", "v1").unwrap().len(), 1);
@@ -904,14 +1050,44 @@ mod tests {
         assert_eq!(hit.sticker_id, s0);
         assert_eq!(hit.model, "qwen");
         assert_eq!(hit.scene, "a chicken on a pan");
-        assert_eq!(hit.situations, vec!["a".to_string(), "b".to_string()], "JSON column parsed");
+        assert_eq!(
+            hit.situations,
+            vec!["a".to_string(), "b".to_string()],
+            "JSON column parsed"
+        );
 
         // Same sticker, different model — a different caption.
-        assert_eq!(repo.find_caption(s0, "llava", "v1").unwrap().unwrap().model, "llava");
+        assert_eq!(
+            repo.find_caption(s0, "llava", "v1").unwrap().unwrap().model,
+            "llava"
+        );
         // No caption for this (model, version).
         assert!(repo.find_caption(s0, "qwen", "v2").unwrap().is_none());
         // No caption for an unknown sticker.
-        assert!(repo.find_caption(Uuid::new_v4(), "qwen", "v1").unwrap().is_none());
+        assert!(
+            repo.find_caption(Uuid::new_v4(), "qwen", "v1")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pack_requests_enqueue_is_idempotent_and_lists_oldest_first() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t0 = OffsetDateTime::UNIX_EPOCH;
+        let t1 = t0 + time::Duration::hours(1);
+
+        repo.enqueue("packB", 42, t1).unwrap();
+        repo.enqueue("packA", 7, t0).unwrap();
+        // Repeat request keeps the first requester/time.
+        repo.enqueue("packA", 999, t1).unwrap();
+
+        let reqs = repo.list_requests().unwrap();
+        assert_eq!(reqs.len(), 2, "no duplicate row for packA");
+        assert_eq!(reqs[0].name, "packA", "oldest request first");
+        assert_eq!(reqs[0].requested_by, 7, "first requester preserved");
+        assert_eq!(reqs[0].requested_at, t0, "first time preserved");
+        assert_eq!(reqs[1].name, "packB");
     }
 
     #[test]
@@ -936,7 +1112,10 @@ mod tests {
         repo.upsert_caption(&c_old).unwrap();
         repo.upsert_caption(&c_fresh).unwrap();
 
-        let desc = CaptionFilter { sort: CaptionSort::DateDesc, ..Default::default() };
+        let desc = CaptionFilter {
+            sort: CaptionSort::DateDesc,
+            ..Default::default()
+        };
         let got = repo.query_captions(&desc).unwrap();
         assert_eq!(got[0].sticker_id, fresh.id, "freshest first");
         assert_eq!(got[1].sticker_id, old.id);

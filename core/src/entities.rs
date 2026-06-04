@@ -202,6 +202,44 @@ pub struct SearchHit {
     pub caption: Caption,
 }
 
+/// A user's request to index a pack, recorded by the bot. The offline pipeline
+/// drains these by name; the *status* of a request is derived from the pipeline's
+/// own data (see [`crate::pack::PackStatus`]), never written back here. First
+/// request for a name wins — re-requests don't overwrite `requested_by`/`at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackRequest {
+    pub name: String,
+    /// Telegram user id that asked for it.
+    pub requested_by: i64,
+    pub requested_at: OffsetDateTime,
+}
+
+/// How far a requested pack has progressed through `scrape → caption → embed`.
+/// Derived on demand from the pipeline's own data, so nothing needs to write
+/// progress back. Each stage means *every* sticker has reached at least it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackStage {
+    /// Requested, but no stickers stored yet (not scraped, or scrape failed).
+    Queued,
+    /// Stickers stored, but not all captioned for the asked (model, prompt).
+    Scraped,
+    /// All captioned, but not all embedded into the collection.
+    Captioned,
+    /// Every sticker embedded — searchable.
+    Ready,
+}
+
+/// A derived status report for one requested pack: its stage plus the counts the
+/// stage is computed from, so a caller can show "captioned 12/50".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackReport {
+    pub name: String,
+    pub stage: PackStage,
+    pub sticker_count: usize,
+    pub captioned_count: usize,
+    pub embedded_count: usize,
+}
+
 /// A captioning prompt, stored once per version. The integrity guard in the
 /// use-case ensures a `version` string maps to exactly one `text`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,7 +270,12 @@ mod tests {
 
     #[test]
     fn embed_text_composes_all_fields_in_order() {
-        let c = caption("a chicken on a pan", "ЗАПАХЛО", "humorous", &["cooking", "panic"]);
+        let c = caption(
+            "a chicken on a pan",
+            "ЗАПАХЛО",
+            "humorous",
+            &["cooking", "panic"],
+        );
         assert_eq!(
             c.embed_text(),
             "a chicken on a pan. text: ЗАПАХЛО. tone: humorous. situations: cooking, panic",

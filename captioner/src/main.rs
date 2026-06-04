@@ -3,21 +3,21 @@
 //! - `stats` / `list` / `search` / `show` / `prompts`: inspect what's stored.
 
 use clap::{Args, Parser, Subcommand};
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use sticker_core::error::{
     CaptionError, CaptionGatewayError, EmbeddingGatewayError, RepoError, SearchError,
     VectorStoreError,
 };
 use sticker_core::{
-    CaptionProgress, CaptionRun, CaptionStickers, CaptionSummary, Prompt, ProgressEvent,
-    SearchHit, SearchQuery, SearchStickers, collection_name,
+    CaptionProgress, CaptionRun, CaptionStickers, CaptionSummary, ProgressEvent, Prompt, SearchHit,
+    SearchQuery, SearchStickers, collection_name,
 };
 use sticker_infra::{
     CaptionFilter, CaptionSort, CaptionView, FsImageStore, OllamaCaptionGateway,
     OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository,
 };
-use std::io::Cursor;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tiny_http::{Header, Response, Server};
@@ -259,8 +259,7 @@ async fn run() -> Result<(), AppError> {
 async fn cmd_run(db: &Path, args: RunArgs) -> Result<(), AppError> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .try_init()
         .map_err(|e| AppError::Tracing(e.to_string()))?;
@@ -292,7 +291,11 @@ async fn cmd_run(db: &Path, args: RunArgs) -> Result<(), AppError> {
 
     let mut total = CaptionSummary::default();
     for pack in scopes {
-        let cfg = CaptionRun { pack, force: args.force, limit: args.limit };
+        let cfg = CaptionRun {
+            pack,
+            force: args.force,
+            limit: args.limit,
+        };
         let s = app.run(&prompt, cfg).await?;
         total.captioned += s.captioned;
         total.skipped += s.skipped;
@@ -368,7 +371,10 @@ fn cmd_search(repo: &SqliteRepository, args: SearchArgs) -> Result<(), AppError>
 fn cmd_show(repo: &SqliteRepository, args: ShowArgs) -> Result<(), AppError> {
     let id = Uuid::parse_str(&args.sticker_id)
         .map_err(|_| AppError::BadStickerId(args.sticker_id.clone()))?;
-    let filter = CaptionFilter { sticker_id: Some(id), ..Default::default() };
+    let filter = CaptionFilter {
+        sticker_id: Some(id),
+        ..Default::default()
+    };
     print_views(&repo.query_captions(&filter)?);
     Ok(())
 }
@@ -383,8 +389,10 @@ fn cmd_gallery(repo: &SqliteRepository, args: GalleryArgs) -> Result<(), AppErro
     };
     let views = repo.query_captions(&filter)?;
     let html = render_gallery(&views, &args.images_dir);
-    std::fs::write(&args.out, html)
-        .map_err(|source| AppError::WriteFile { path: args.out.display().to_string(), source })?;
+    std::fs::write(&args.out, html).map_err(|source| AppError::WriteFile {
+        path: args.out.display().to_string(),
+        source,
+    })?;
     println!(
         "wrote {} caption(s) to {} — open it in a browser",
         views.len(),
@@ -428,11 +436,17 @@ fn render_page(views: &[CaptionView], img_prefix: &str, controls: &str) -> Strin
          </style>",
     );
     h.push_str(controls);
-    h.push_str(&format!("<h1>{} caption(s)</h1><div class=grid>", views.len()));
+    h.push_str(&format!(
+        "<h1>{} caption(s)</h1><div class=grid>",
+        views.len()
+    ));
     for v in views {
         let src = format!("{}/{}", img_prefix, v.image_path);
         h.push_str("<div class=card>");
-        h.push_str(&format!("<img src=\"{}\" loading=lazy alt=\"\">", escape(&src)));
+        h.push_str(&format!(
+            "<img src=\"{}\" loading=lazy alt=\"\">",
+            escape(&src)
+        ));
         h.push_str(&format!(
             "<div class=meta>{} · {} / {}</div>",
             escape(&v.pack),
@@ -441,13 +455,22 @@ fn render_page(views: &[CaptionView], img_prefix: &str, controls: &str) -> Strin
         ));
         h.push_str(&format!("<div class=scene>{}</div>", escape(&v.scene)));
         if !v.on_image_text.is_empty() {
-            h.push_str(&format!("<div class=text>“{}”</div>", escape(&v.on_image_text)));
+            h.push_str(&format!(
+                "<div class=text>“{}”</div>",
+                escape(&v.on_image_text)
+            ));
         }
         h.push_str(&format!("<div class=tone>{}</div>", escape(&v.tone)));
         if !v.situations.is_empty() {
-            h.push_str(&format!("<div class=uses>{}</div>", escape(&v.situations.join(" · "))));
+            h.push_str(&format!(
+                "<div class=uses>{}</div>",
+                escape(&v.situations.join(" · "))
+            ));
         }
-        h.push_str(&format!("<div class=meta>{}</div>", escape(&v.sticker_id.to_string())));
+        h.push_str(&format!(
+            "<div class=meta>{}</div>",
+            escape(&v.sticker_id.to_string())
+        ));
         h.push_str("</div>");
     }
     h.push_str("</div>");
@@ -459,7 +482,10 @@ fn render_page(views: &[CaptionView], img_prefix: &str, controls: &str) -> Strin
 fn cmd_serve(repo: &SqliteRepository, args: ServeArgs) -> Result<(), AppError> {
     let addr = format!("127.0.0.1:{}", args.port);
     let server = Server::http(&addr).map_err(|e| AppError::Serve(e.to_string()))?;
-    println!("captioner review server on http://localhost:{}/  (Ctrl-C to stop)", args.port);
+    println!(
+        "captioner review server on http://localhost:{}/  (Ctrl-C to stop)",
+        args.port
+    );
     for request in server.incoming_requests() {
         let response = build_response(repo, &args.images_dir, request.url());
         if let Err(e) = request.respond(response) {
@@ -478,7 +504,10 @@ fn build_response(
         return serve_image(images_dir, rel);
     }
     match render_review(repo, url) {
-        Ok(html) => with_type(Response::from_data(html.into_bytes()), "text/html; charset=utf-8"),
+        Ok(html) => with_type(
+            Response::from_data(html.into_bytes()),
+            "text/html; charset=utf-8",
+        ),
         Err(e) => text_response(500, &format!("error: {e}")),
     }
 }
@@ -491,7 +520,11 @@ fn render_review(repo: &SqliteRepository, url: &str) -> Result<String, RepoError
         _ => CaptionSort::DateDesc, // freshest first by default
     };
     let packs = repo.caption_packs()?;
-    let filter = CaptionFilter { pack: pack.clone(), sort, ..Default::default() };
+    let filter = CaptionFilter {
+        pack: pack.clone(),
+        sort,
+        ..Default::default()
+    };
     let views = repo.query_captions(&filter)?;
     let controls = render_controls(&packs, pack.as_deref(), sort);
     Ok(render_page(&views, "/images", &controls))
@@ -506,9 +539,21 @@ fn render_controls(packs: &[String], current_pack: Option<&str>, sort: CaptionSo
     }
     s.push_str("</select></label> ");
     s.push_str("<label>sort <select name=sort onchange=\"this.form.submit()\">");
-    s.push_str(&option("date_desc", "freshest first", sort == CaptionSort::DateDesc));
-    s.push_str(&option("date_asc", "oldest first", sort == CaptionSort::DateAsc));
-    s.push_str(&option("pack", "by pack", sort == CaptionSort::PackPosition));
+    s.push_str(&option(
+        "date_desc",
+        "freshest first",
+        sort == CaptionSort::DateDesc,
+    ));
+    s.push_str(&option(
+        "date_asc",
+        "oldest first",
+        sort == CaptionSort::DateAsc,
+    ));
+    s.push_str(&option(
+        "pack",
+        "by pack",
+        sort == CaptionSort::PackPosition,
+    ));
     s.push_str("</select></label></form>");
     s
 }
@@ -592,7 +637,10 @@ enum Outcome<'a> {
     /// No query yet (first load).
     Idle,
     /// Ranked hits and how long the whole query took (embed + search + resolve).
-    Hits { hits: &'a [SearchHit], elapsed: Duration },
+    Hits {
+        hits: &'a [SearchHit],
+        elapsed: Duration,
+    },
     /// The query failed (model/store/db error).
     Failed(String),
 }
@@ -610,8 +658,7 @@ async fn cmd_vsearch(db: &Path, args: VsearchArgs) -> Result<(), AppError> {
     let store = QdrantVectorStore::new(&args.qdrant_url, EMBED_TIMEOUT)?;
     let app = SearchStickers::new(gateway, store, open_db(db)?, open_db(db)?);
 
-    let collection =
-        collection_name(&args.caption_model, &args.prompt_version, &args.embed_model);
+    let collection = collection_name(&args.caption_model, &args.prompt_version, &args.embed_model);
     let addr = format!("127.0.0.1:{}", args.port);
     let server = Server::http(&addr).map_err(|e| AppError::Serve(e.to_string()))?;
     println!(
@@ -635,7 +682,8 @@ async fn cmd_vsearch(db: &Path, args: VsearchArgs) -> Result<(), AppError> {
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         for request in server.incoming_requests() {
-            let response = handle.block_on(handle_vsearch(&app, &images_dir, &defaults, request.url()));
+            let response =
+                handle.block_on(handle_vsearch(&app, &images_dir, &defaults, request.url()));
             if let Err(e) = request.respond(response) {
                 tracing::warn!(error = %e, "failed to send response");
             }
@@ -656,7 +704,9 @@ async fn handle_vsearch(
         return serve_image(images_dir, rel);
     }
 
-    let query = query_param(url, "q").map(|v| percent_decode(&v)).unwrap_or_default();
+    let query = query_param(url, "q")
+        .map(|v| percent_decode(&v))
+        .unwrap_or_default();
     let query = query.trim();
     if query.is_empty() {
         return html_ok(render_search_page("", &d.collection, Outcome::Idle));
@@ -682,12 +732,19 @@ async fn handle_vsearch(
         Ok(hits) => html_ok(render_search_page(
             query,
             &d.collection,
-            Outcome::Hits { hits: &hits, elapsed: started.elapsed() },
+            Outcome::Hits {
+                hits: &hits,
+                elapsed: started.elapsed(),
+            },
         )),
         Err(e) => {
             tracing::warn!(error = %e, "query failed");
             let msg = describe_search_error(&e);
-            html_ok(render_search_page(query, &d.collection, Outcome::Failed(msg)))
+            html_ok(render_search_page(
+                query,
+                &d.collection,
+                Outcome::Failed(msg),
+            ))
         }
     }
 }
@@ -701,7 +758,10 @@ fn describe_search_error(e: &SearchError) -> String {
 }
 
 fn html_ok(html: String) -> Response<Cursor<Vec<u8>>> {
-    with_type(Response::from_data(html.into_bytes()), "text/html; charset=utf-8")
+    with_type(
+        Response::from_data(html.into_bytes()),
+        "text/html; charset=utf-8",
+    )
 }
 
 /// Render the search page: the form (with the current query), a status line, and
@@ -739,7 +799,10 @@ fn render_search_page(query: &str, set_label: &str, outcome: Outcome<'_>) -> Str
     ));
     match outcome {
         Outcome::Idle => {
-            h.push_str(&format!("<div class=status>set: {}</div>", escape(set_label)));
+            h.push_str(&format!(
+                "<div class=status>set: {}</div>",
+                escape(set_label)
+            ));
         }
         Outcome::Failed(msg) => {
             h.push_str(&format!("<div class=\"status err\">{}</div>", escape(&msg)));
@@ -766,14 +829,23 @@ fn render_hit_card(h: &mut String, hit: &SearchHit) {
     let src = format!("/images/{}", hit.sticker.image_path);
     h.push_str("<div class=card>");
     h.push_str(&format!("<div class=score>{:.3}</div>", hit.score));
-    h.push_str(&format!("<img src=\"{}\" loading=lazy alt=\"\">", escape(&src)));
+    h.push_str(&format!(
+        "<img src=\"{}\" loading=lazy alt=\"\">",
+        escape(&src)
+    ));
     h.push_str(&format!("<div class=scene>{}</div>", escape(&c.scene)));
     if !c.on_image_text.is_empty() {
-        h.push_str(&format!("<div class=text>“{}”</div>", escape(&c.on_image_text)));
+        h.push_str(&format!(
+            "<div class=text>“{}”</div>",
+            escape(&c.on_image_text)
+        ));
     }
     h.push_str(&format!("<div class=tone>{}</div>", escape(&c.tone)));
     if !c.situations.is_empty() {
-        h.push_str(&format!("<div class=uses>{}</div>", escape(&c.situations.join(" · "))));
+        h.push_str(&format!(
+            "<div class=uses>{}</div>",
+            escape(&c.situations.join(" · "))
+        ));
     }
     let emoji = hit.sticker.emoji.as_deref().unwrap_or("");
     h.push_str(&format!(
@@ -854,7 +926,10 @@ fn print_views(views: &[CaptionView]) {
         return;
     }
     for v in views {
-        println!("{} [{}]  {} / {}", v.pack, v.sticker_id, v.model, v.prompt_version);
+        println!(
+            "{} [{}]  {} / {}",
+            v.pack, v.sticker_id, v.model, v.prompt_version
+        );
         println!("  scene: {}", v.scene);
         if !v.on_image_text.is_empty() {
             println!("  text:  {}", v.on_image_text);
@@ -906,19 +981,32 @@ mod tests {
         let html = render_gallery(std::slice::from_ref(&sample_view()), Path::new("stickers"));
 
         assert!(html.contains("src=\"stickers/packA/x.webp\""));
-        assert!(html.contains("a &lt;chicken&gt; &amp; friends"), "scene escaped");
+        assert!(
+            html.contains("a &lt;chicken&gt; &amp; friends"),
+            "scene escaped"
+        );
         assert!(html.contains("ЗАПАХЛО"), "Cyrillic OCR preserved");
         assert!(html.contains("1 caption(s)"));
     }
 
     #[test]
     fn server_page_uses_image_route_and_controls() {
-        let controls = render_controls(&["packA".into(), "packB".into()], Some("packB"), CaptionSort::DateDesc);
+        let controls = render_controls(
+            &["packA".into(), "packB".into()],
+            Some("packB"),
+            CaptionSort::DateDesc,
+        );
         let html = render_page(std::slice::from_ref(&sample_view()), "/images", &controls);
 
-        assert!(html.contains("src=\"/images/packA/x.webp\""), "served image route");
+        assert!(
+            html.contains("src=\"/images/packA/x.webp\""),
+            "served image route"
+        );
         assert!(html.contains("<form method=get"), "controls present");
-        assert!(html.contains("<option value=\"packB\" selected>packB</option>"), "pack preselected");
+        assert!(
+            html.contains("<option value=\"packB\" selected>packB</option>"),
+            "pack preselected"
+        );
         assert!(
             html.contains("<option value=\"date_desc\" selected>freshest first</option>"),
             "sort preselected",
@@ -927,8 +1015,14 @@ mod tests {
 
     #[test]
     fn query_param_extracts_values() {
-        assert_eq!(query_param("/?pack=mne_pochuj&sort=date_asc", "pack").as_deref(), Some("mne_pochuj"));
-        assert_eq!(query_param("/?pack=mne_pochuj&sort=date_asc", "sort").as_deref(), Some("date_asc"));
+        assert_eq!(
+            query_param("/?pack=mne_pochuj&sort=date_asc", "pack").as_deref(),
+            Some("mne_pochuj")
+        );
+        assert_eq!(
+            query_param("/?pack=mne_pochuj&sort=date_asc", "sort").as_deref(),
+            Some("date_asc")
+        );
         assert_eq!(query_param("/?pack=", "pack").as_deref(), Some(""));
         assert_eq!(query_param("/", "pack"), None);
     }
@@ -952,10 +1046,17 @@ mod tests {
     #[test]
     fn percent_decode_handles_cyrillic_plus_and_bad_escapes() {
         // "привет" URL-encoded, plus a '+' space.
-        assert_eq!(percent_decode("%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82+мир"), "привет мир");
+        assert_eq!(
+            percent_decode("%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82+мир"),
+            "привет мир"
+        );
         assert_eq!(percent_decode("a%2Bb"), "a+b", "%2B is a literal plus");
         assert_eq!(percent_decode("plain"), "plain");
-        assert_eq!(percent_decode("100%"), "100%", "trailing bare % left literal");
+        assert_eq!(
+            percent_decode("100%"),
+            "100%",
+            "trailing bare % left literal"
+        );
         assert_eq!(percent_decode("%zz"), "%zz", "non-hex escape left literal");
     }
 
@@ -995,14 +1096,26 @@ mod tests {
         let html = render_search_page(
             "птица",
             "stickers__qwen__v1__bge-m3",
-            Outcome::Hits { hits: &hits, elapsed: Duration::from_millis(84) },
+            Outcome::Hits {
+                hits: &hits,
+                elapsed: Duration::from_millis(84),
+            },
         );
 
-        assert!(html.contains("value=\"птица\""), "query preserved in the box");
+        assert!(
+            html.contains("value=\"птица\""),
+            "query preserved in the box"
+        );
         assert!(html.contains("1 hit(s) in 84 ms"), "latency + count shown");
-        assert!(html.contains("src=\"/images/packA/x.webp\""), "served image route");
+        assert!(
+            html.contains("src=\"/images/packA/x.webp\""),
+            "served image route"
+        );
         assert!(html.contains("0.876"), "score badge");
-        assert!(html.contains("a &lt;chicken&gt; &amp; friends"), "scene escaped");
+        assert!(
+            html.contains("a &lt;chicken&gt; &amp; friends"),
+            "scene escaped"
+        );
         assert!(html.contains("ЗАПАХЛО"), "Cyrillic OCR preserved");
     }
 
@@ -1010,7 +1123,10 @@ mod tests {
     fn search_page_idle_and_error_states() {
         let idle = render_search_page("", "the_set", Outcome::Idle);
         assert!(idle.contains("set: the_set"));
-        assert!(!idle.contains("class=grid"), "no results grid before a query");
+        assert!(
+            !idle.contains("class=grid"),
+            "no results grid before a query"
+        );
 
         let err = render_search_page("q", "the_set", Outcome::Failed("boom".into()));
         assert!(err.contains("class=\"status err\""));

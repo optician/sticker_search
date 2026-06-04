@@ -2,7 +2,7 @@
 
 Search Telegram stickers by text. Pipeline stages: scrape packs → caption →
 embed → vector search. The **scraper**, **captioner**, **embedder**, and the
-**query** server all exist; the live Telegram bot is the remaining stage.
+**query** server, and the live **Telegram bot** all exist.
 
 ## Running the scraper
 
@@ -305,6 +305,56 @@ embedder wrote, or the collection won't resolve.
 | `--limit <n>` | `10` | Results per query (UI `k` box overrides). |
 | `--min-score <f>` | _none_ | Drop hits below this cosine score (UI `min` overrides). |
 | `--images-dir <path>` | `stickers` | Thumbnails, served under `/images/`. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Sticker + caption database. |
+
+## Running the bot
+
+The live Telegram interface (`teloxide`). Two surfaces: **inline search** and
+**`/add`**. Needs the same Ollama + Qdrant the embedder used, plus `meta.sqlite`.
+
+```bash
+export TELEGRAM_BOT_TOKEN=<the same token you scraped with>
+cargo run -p bot
+```
+
+Two one-time setup steps in [@BotFather](https://t.me/BotFather):
+
+- **Enable inline mode** (`/setinline`, give it a placeholder like `search
+  stickers…`). Without this, Telegram never sends inline queries and search is
+  dead.
+- **Use the same bot that scraped the packs.** Inline results are
+  `InlineQueryResultCachedSticker`s referencing each sticker's `file_id`, which is
+  per-bot — a different token can't send them.
+
+**Search:** in any chat type `@your_bot some query` — ranked stickers appear as
+you type, embedded and searched through the same collection the embedder wrote.
+
+**Add a pack:** `/add <link or name>`, or just send the bot a sticker from the
+pack (it reads the pack name off the sticker). The bot can't see your installed
+packs — the Bot API has no such method — so you point it at the ones you want.
+`/add` only **queues** the pack (it doesn't run the minutes-long VLM/embed
+pipeline live); run it through the offline stages with:
+
+```bash
+cargo run -p scrapper -- --from-queue      # drain queued packs into stickers/
+cargo run -p captioner                     # then caption + embed as usual
+cargo run -p embedder
+```
+
+Re-running `/add` (or `/add` on a pack already in the index) reports the pack's
+derived stage — `queued → scraped → captioned → ready`, with counts like
+"captioned 12/50" — computed on demand from the pipeline's own data.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--caption-model <tag>` | `qwen3-vl:32b` | Caption set (collection) to search. |
+| `--prompt-version <v>` | `v1` | Prompt version of that set. |
+| `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
+| `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |
+| `--limit <n>` | `30` | Max inline results per query (Telegram caps at 50). |
+| `--min-score <f>` | _none_ | Drop hits below this cosine score. |
 | `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
 | `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
 | `--db <path>` | `stickers/meta.sqlite` | Sticker + caption database. |

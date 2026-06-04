@@ -3,11 +3,13 @@
 //! collection per `(caption_model, prompt_version, embed_model)` set.
 
 use clap::{Args, Parser};
-use sticker_core::error::{EmbedError, EmbeddingGatewayError, RepoError, VectorStoreError};
-use sticker_core::{EmbedCaptions, EmbedEvent, EmbedProgress, EmbedRun, EmbedSummary, collection_name};
-use sticker_infra::{OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository};
 use std::path::PathBuf;
 use std::time::Duration;
+use sticker_core::error::{EmbedError, EmbeddingGatewayError, RepoError, VectorStoreError};
+use sticker_core::{
+    EmbedCaptions, EmbedEvent, EmbedProgress, EmbedRun, EmbedSummary, collection_name,
+};
+use sticker_infra::{OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository};
 use thiserror::Error;
 
 /// The caption set to embed by default — matches the captioner's defaults.
@@ -116,7 +118,11 @@ async fn cmd_run(db: &std::path::Path, args: RunArgs) -> Result<(), AppError> {
         force: args.force,
         limit: args.limit,
     };
-    let EmbedSummary { embedded, skipped, failed } = app.run(cfg).await?;
+    let EmbedSummary {
+        embedded,
+        skipped,
+        failed,
+    } = app.run(cfg).await?;
 
     println!(
         "done: embedded {embedded}, skipped {skipped}, failed {failed} \

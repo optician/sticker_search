@@ -123,6 +123,16 @@ pub enum SearchError {
     Repo(#[from] RepoError),
 }
 
+/// Error for deriving a pack's pipeline status. Reads the metadata store and
+/// probes the vector store, so either layer can fail it.
+#[derive(Debug, Error)]
+pub enum PackStatusError {
+    #[error(transparent)]
+    Repo(#[from] RepoError),
+    #[error(transparent)]
+    Store(#[from] VectorStoreError),
+}
+
 /// Run-level error for the captioning use-case. Carries setup failures that
 /// abort before processing (prompt precondition, listing stickers). Per-sticker
 /// failures are logged and counted, never wrapped here.

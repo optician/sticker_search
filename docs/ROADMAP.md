@@ -1,8 +1,8 @@
 # Roadmap
 
-Pipeline: **scrape → caption → embed → search**. Stages run offline as a batch
-to build the index; only the query path is live. Each sticker is keyed by its
-UUID across all stages.
+Pipeline: **scrape → caption → embed → search**. The offline stages build the
+index as a batch; the **bot** is the live interface (inline search + queueing
+new packs). Each sticker is keyed by its UUID across all stages.
 
 ## Done
 
@@ -46,12 +46,23 @@ UUID across all stages.
   result grid with thumbnails, scores, captions, and per-query latency. Query text
   is percent-decoded so Cyrillic searches work. See `README.md`.
 
-## Remaining
-
-### Bot (live interface)
-- **Target:** users query and receive stickers in Telegram.
-- **Solution:** `teloxide` bot wrapping the query path. Composition root only —
-  the search logic stays in `core`.
+- **Bot** (`bot` crate, `teloxide` 0.17). The live interface, composition root
+  only — search/status logic stays in `core`. Two surfaces:
+  - **Inline search.** `@bot <query>` in any chat → ranked stickers as you type,
+    via the existing `SearchStickers` query path. Hits become
+    `InlineQueryResultCachedSticker`s keyed by each sticker's `file_id`. Requires
+    inline mode enabled in @BotFather, and the bot **must run under the same token
+    that scraped the packs** (`file_id` is per-bot).
+  - **`/add <link|name>`** (or sending a sticker — its `set_name` is read from the
+    update, no API call). Verifies the pack exists, then queues it in a new
+    `pack_requests` table (new `PackRequests` port). Open to any user. Re-running
+    `/add` (or `/add` on a known pack) reports the pack's **derived** stage —
+    `queued → scraped → captioned → ready` plus counts — computed on demand by the
+    `PackStatus` use-case from the pipeline's own data (stickers, captions,
+    vectors), so the offline batch never writes progress back. The scraper drains
+    the queue with `--from-queue`. `normalize_pack_name` moved into `core` and is
+    shared by scraper and bot. `SqliteRepository` now guards its connection with a
+    `Mutex` so it's `Sync` for the async multi-threaded dispatcher.
 
 ## Open questions
 
@@ -61,6 +72,18 @@ UUID across all stages.
   the field composition causes before tweaking it.
 
 ## Resolved / notes
+
+- **Can the bot import a user's installed packs automatically?** No. The Bot API
+  has no method to enumerate a user's sticker sets — only an MTProto *userbot*
+  (the user's own account) can, via `messages.getAllStickers`. So packs enter the
+  index one of two ways: list links in `packs.txt`, or `/add` them (by link, name,
+  or by sending a sticker the bot reads `set_name` from). A one-off userbot script
+  could bulk-export, but that's out of scope for the bot token.
+- **Pack-add is queue-only, status is derived.** The bot deliberately does *not*
+  run the VLM/embedding pipeline live (a 50-sticker pack is minutes on the local
+  models). It only records the request; the operator runs `scrapper --from-queue`
+  then the usual caption/embed batch. Status counts come free from the same data,
+  so `/add` shows "captioned 12/50" without any progress bookkeeping.
 
 - **Caption embeddings alone, or hybrid with CLIP image vectors?** Caption-only
   for now: one model, simplest path, and the OCR-rich captions already carry the

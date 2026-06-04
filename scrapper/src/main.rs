@@ -1,11 +1,12 @@
 //! Composition root: parse inputs, build adapters, run the `ScrapePacks` use-case.
 
 use clap::Parser;
-use sticker_core::ScrapePacks;
-use sticker_core::error::RepoError;
-use sticker_infra::{BotApiGateway, FsImageStore, SqliteRepository};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use sticker_core::error::RepoError;
+use sticker_core::ports::PackRequests;
+use sticker_core::{ScrapePacks, normalize_pack_name};
+use sticker_infra::{BotApiGateway, FsImageStore, SqliteRepository};
 use thiserror::Error;
 
 /// Download Telegram sticker packs (thumbnail image + metadata) into a local
@@ -19,6 +20,10 @@ struct Cli {
     /// File with one pack name per line (`#` comments and blanks ignored).
     #[arg(long, default_value = "packs.txt")]
     packs_file: PathBuf,
+
+    /// Also scrape every pack the bot has queued (the `pack_requests` table).
+    #[arg(long)]
+    from_queue: bool,
 
     /// Output directory for images and meta.sqlite.
     #[arg(long, default_value = "stickers")]
@@ -49,34 +54,18 @@ enum AppError {
     Tracing(String),
 }
 
-/// Extract the bare pack name from a share link or `tg://` URL, accepting:
-/// `crazy_klutzy`, `https://t.me/addstickers/crazy_klutzy`,
-/// `t.me/addstickers/crazy_klutzy`, `tg://addstickers?set=crazy_klutzy`.
-/// Anything that isn't a recognized link is returned trimmed as-is.
-fn normalize_pack_name(raw: &str) -> String {
-    let s = raw.trim();
-    if s.contains("addstickers") {
-        if let Some(rest) = s.rsplit_once("addstickers/").map(|(_, r)| r) {
-            // https://t.me/addstickers/<name>[/?#...]
-            return rest.split(['/', '?', '#']).next().unwrap_or(rest).to_string();
-        }
-        if let Some(rest) = s.split_once("set=").map(|(_, r)| r) {
-            // tg://addstickers?set=<name>[&#...]
-            return rest.split(['&', '#']).next().unwrap_or(rest).to_string();
-        }
-    }
-    s.to_string()
-}
-
-/// Pack names from the file (if it exists) followed by CLI args. Each entry may
-/// be a bare id or a share link. Normalized, blanks dropped, de-duplicated with
-/// first-seen order preserved.
-fn collect_pack_names(cli: &Cli) -> Result<Vec<String>, AppError> {
+/// Pack names from the file (if it exists), CLI args, and `queue` (the bot's
+/// requested packs when `--from-queue` is set). Each entry may be a bare id or a
+/// share link. Normalized, blanks dropped, de-duplicated with first-seen order
+/// preserved.
+fn collect_pack_names(cli: &Cli, queue: &[String]) -> Result<Vec<String>, AppError> {
     let mut names = Vec::new();
     if cli.packs_file.exists() {
-        let text = std::fs::read_to_string(&cli.packs_file).map_err(|source| {
-            AppError::ReadPacks { path: cli.packs_file.display().to_string(), source }
-        })?;
+        let text =
+            std::fs::read_to_string(&cli.packs_file).map_err(|source| AppError::ReadPacks {
+                path: cli.packs_file.display().to_string(),
+                source,
+            })?;
         for line in text.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {
@@ -85,6 +74,7 @@ fn collect_pack_names(cli: &Cli) -> Result<Vec<String>, AppError> {
         }
     }
     names.extend(cli.pack_names.iter().map(|n| normalize_pack_name(n)));
+    names.extend(queue.iter().map(|n| normalize_pack_name(n)));
 
     names.retain(|n| !n.is_empty());
     let mut seen = HashSet::new();
@@ -97,24 +87,33 @@ async fn run() -> Result<(), AppError> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .try_init()
         .map_err(|e| AppError::Tracing(e.to_string()))?;
 
     let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| AppError::MissingToken)?;
 
-    let names = collect_pack_names(&cli)?;
+    std::fs::create_dir_all(&cli.out).map_err(|source| AppError::CreateOut {
+        path: cli.out.display().to_string(),
+        source,
+    })?;
+
+    // Open the store up front so we can drain the bot's queue before scraping;
+    // the same connection is then moved into the use-case.
+    let repo = SqliteRepository::open(cli.out.join("meta.sqlite"))?;
+    let queue: Vec<String> = if cli.from_queue {
+        repo.list_requests()?.into_iter().map(|r| r.name).collect()
+    } else {
+        Vec::new()
+    };
+
+    let names = collect_pack_names(&cli, &queue)?;
     if names.is_empty() {
         return Err(AppError::NoPacks(cli.packs_file.display().to_string()));
     }
 
-    std::fs::create_dir_all(&cli.out)
-        .map_err(|source| AppError::CreateOut { path: cli.out.display().to_string(), source })?;
-
     let gateway = BotApiGateway::new(token);
-    let repo = SqliteRepository::open(cli.out.join("meta.sqlite"))?;
     let images = FsImageStore::new(&cli.out);
 
     let app = ScrapePacks::new(gateway, repo, images);
@@ -143,20 +142,29 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_pack_name;
-    use rstest::rstest;
+    use super::{Cli, collect_pack_names};
+    use std::path::PathBuf;
 
-    #[rstest]
-    #[case("crazy_klutzy", "crazy_klutzy")]
-    #[case("  crazy_klutzy  ", "crazy_klutzy")]
-    #[case("https://t.me/addstickers/crazy_klutzy", "crazy_klutzy")]
-    #[case("http://t.me/addstickers/crazy_klutzy", "crazy_klutzy")]
-    #[case("t.me/addstickers/crazy_klutzy", "crazy_klutzy")]
-    #[case("https://t.me/addstickers/crazy_klutzy/", "crazy_klutzy")]
-    #[case("https://t.me/addstickers/crazy_klutzy?foo=bar", "crazy_klutzy")]
-    #[case("tg://addstickers?set=crazy_klutzy", "crazy_klutzy")]
-    #[case("tg://addstickers?set=crazy_klutzy&mode=x", "crazy_klutzy")]
-    fn normalizes_links_and_ids(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(normalize_pack_name(input), expected);
+    /// A `Cli` with no packs-file on disk (the file branch is skipped) and the
+    /// given CLI args.
+    fn cli(pack_names: &[&str]) -> Cli {
+        Cli {
+            pack_names: pack_names.iter().map(|s| s.to_string()).collect(),
+            packs_file: PathBuf::from("/nonexistent/packs.txt"),
+            from_queue: false,
+            out: PathBuf::from("stickers"),
+        }
+    }
+
+    #[test]
+    fn merges_cli_and_queue_normalized_and_deduped() {
+        let queue = [
+            "https://t.me/addstickers/from_queue".to_string(),
+            "dup".to_string(),
+        ];
+        let names = collect_pack_names(&cli(&["dup", "  cli_pack  "]), &queue).unwrap();
+
+        // CLI first (first-seen order), then queue; links normalized; "dup" once.
+        assert_eq!(names, vec!["dup", "cli_pack", "from_queue"]);
     }
 }

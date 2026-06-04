@@ -1,0 +1,19 @@
+[package]
+name = "bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sticker-core = { workspace = true }
+sticker-infra = { workspace = true }
+teloxide = { version = "0.17", features = ["macros"] }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

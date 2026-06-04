@@ -82,8 +82,8 @@ impl CaptionGateway for OllamaCaptionGateway {
 /// Decode any supported image (webp/png/…) and re-encode as PNG, which the
 /// model's vision path reliably accepts.
 fn to_png(bytes: &[u8]) -> Result<Vec<u8>, CaptionGatewayError> {
-    let img = image::load_from_memory(bytes)
-        .map_err(|e| CaptionGatewayError::Image(e.to_string()))?;
+    let img =
+        image::load_from_memory(bytes).map_err(|e| CaptionGatewayError::Image(e.to_string()))?;
     let mut out = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
         .map_err(|e| CaptionGatewayError::Image(e.to_string()))?;
@@ -189,7 +189,10 @@ mod tests {
         let dynimg = image::DynamicImage::ImageRgba8(img);
         let mut webp = Vec::new();
         dynimg
-            .write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP)
+            .write_to(
+                &mut std::io::Cursor::new(&mut webp),
+                image::ImageFormat::WebP,
+            )
             .unwrap();
 
         let png = to_png(&webp).unwrap();

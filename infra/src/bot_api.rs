@@ -21,7 +21,11 @@ impl BotApiGateway {
 
     /// Override the base URL (used to point at a mock server in tests).
     pub fn with_base(token: impl Into<String>, base: impl Into<String>) -> Self {
-        Self { client: reqwest::Client::new(), token: token.into(), base: base.into() }
+        Self {
+            client: reqwest::Client::new(),
+            token: token.into(),
+            base: base.into(),
+        }
     }
 
     fn method_url(&self, method: &str) -> String {
@@ -102,7 +106,11 @@ fn parse_sticker_set(raw: RawSet) -> RemoteStickerSet {
             height: s.height,
         })
         .collect();
-    RemoteStickerSet { name: raw.name, title: raw.title, stickers }
+    RemoteStickerSet {
+        name: raw.name,
+        title: raw.title,
+        stickers,
+    }
 }
 
 fn ext_of(file_path: &str) -> String {
@@ -152,7 +160,9 @@ impl TelegramGateway for BotApiGateway {
             .map_err(transport)?;
         let body: ApiResponse<RawFile> = resp.json().await.map_err(transport)?;
         if !body.ok {
-            return Err(GatewayError::Transport(body.description.unwrap_or_default()));
+            return Err(GatewayError::Transport(
+                body.description.unwrap_or_default(),
+            ));
         }
         let file_path = body
             .result
@@ -169,7 +179,10 @@ impl TelegramGateway for BotApiGateway {
             .bytes()
             .await
             .map_err(transport)?;
-        Ok(FileData { bytes: bytes.to_vec(), ext })
+        Ok(FileData {
+            bytes: bytes.to_vec(),
+            ext,
+        })
     }
 }
 
@@ -215,7 +228,10 @@ mod tests {
         assert!(a.is_video);
 
         let b = &set.stickers[1];
-        assert_eq!(b.thumb_file_id, None, "missing thumbnail → None (falls back to file_id later)");
+        assert_eq!(
+            b.thumb_file_id, None,
+            "missing thumbnail → None (falls back to file_id later)"
+        );
         assert!(b.is_animated);
         assert_eq!(b.emoji, None);
     }
