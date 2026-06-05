@@ -1,0 +1,383 @@
+# sticker-search
+
+Search Telegram stickers by text. Pipeline stages: scrape packs → caption →
+embed → vector search. The **scraper**, **captioner**, **embedder**, and the
+**query** server, and the live **Telegram bot** all exist.
+
+## Running the scraper
+
+Downloads each pack's static thumbnail + metadata into `stickers/` (images per
+pack) and `stickers/meta.sqlite`.
+
+### Prerequisites
+
+- Rust (edition 2024 toolchain).
+- A bot token from [@BotFather](https://t.me/BotFather).
+
+### Usage
+
+```bash
+export TELEGRAM_BOT_TOKEN=<your bot token>
+
+# accepts bare ids or share links, interchangeably:
+#   crazy_klutzy
+#   https://t.me/addstickers/crazy_klutzy
+cargo run -p scrapper -- <pack_or_link> [<pack_or_link> ...]
+```
+
+Or list packs in a file (one name per line; `#` comments and blank lines are
+ignored) — merged with any names passed as arguments:
+
+```bash
+cat > packs.txt <<'EOF'
+# my packs
+some_pack_name
+another_pack
+EOF
+
+cargo run -p scrapper
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--packs-file <path>` | `packs.txt` | File of pack names, one per line. |
+| `--out <dir>` | `stickers` | Output directory for images + `meta.sqlite`. |
+
+Re-runs are safe and resumable: existing stickers (keyed by `file_unique_id`)
+keep their UUID and already-downloaded images are skipped. On completion it
+prints a summary:
+
+```
+done: packs 2 ok / 0 failed | stickers 48 downloaded, 0 skipped, 0 failed
+```
+
+## Running the captioner
+
+Captions each scraped thumbnail with a local vision model (via
+[Ollama](https://ollama.com)) and writes structured, retrieval-oriented text
+into the existing `stickers/meta.sqlite`: a literal `scene`, verbatim
+`on_image_text` (OCR), emotional `tone`, and the `situations` it's sent in.
+
+### Prerequisites
+
+- A running Ollama with a vision model pulled, e.g.:
+
+  ```bash
+  ollama pull qwen3-vl:8b
+  ```
+
+- A populated `stickers/meta.sqlite` (run the scraper first).
+
+### Running a batch
+
+The captioner is one binary with subcommands. The `run` subcommand does the
+captioning; bare `cargo run -p captioner` (no subcommand) is shorthand for
+`run` with defaults — caption every scraped sticker with `qwen3-vl:8b`:
+
+```bash
+# caption everything, default model
+cargo run -p captioner
+
+# scope to packs and cap the run (flags go after `run`)
+cargo run -p captioner -- run --pack crazy_klutzy --limit 2
+```
+
+Re-runs are safe and resumable: a sticker already captioned by the same
+`(model, prompt_version)` is skipped. Use `--force` to re-caption it.
+
+While it runs it shows a live progress line — the in-flight sticker (each takes
+~15s on the model), updated in place with the outcome and an `[n/total]` counter:
+
+```
+[ 12/48] mne_pochuj/8f3c….webp ✓
+```
+
+On completion it prints a summary:
+
+```
+done: captioned 48, skipped 0, failed 0 (model qwen3-vl:8b, prompt v1)
+```
+
+`run` options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--pack <name>` | _all packs_ | Restrict to a pack; repeatable. |
+| `--model <tag>` | `qwen3-vl:8b` | Ollama model tag. |
+| `--images-dir <dir>` | `stickers` | Root holding the per-pack thumbnails. |
+| `--force` | off | Re-caption stickers already done for this model + prompt. |
+| `--limit <n>` | _none_ | Stop after N stickers per pack. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+
+`--db <path>` (default `stickers/meta.sqlite`) is global — it works with every
+subcommand, before or after the subcommand name.
+
+### Changing the model
+
+The model is a runtime flag — no rebuild:
+
+```bash
+cargo run -p captioner -- run --model qwen3-vl:8b
+```
+
+It must be pulled in Ollama first (`ollama pull <tag>`). Captions are keyed by
+model, so a second model's output is stored **alongside** the first rather than
+replacing it — caption with both, then compare a sticker's rows:
+
+```bash
+cargo run -p captioner -- show <sticker-uuid>
+```
+
+To change the default tag, edit the `--model` default in
+`captioner/src/main.rs`.
+
+### Changing the prompt
+
+The prompt lives as two consts in `captioner/src/main.rs`:
+
+```rust
+const PROMPT_VERSION: &str = "v1";
+const PROMPT_TEXT: &str = "You are captioning a Telegram sticker ...";
+```
+
+When you edit `PROMPT_TEXT`, **bump `PROMPT_VERSION`** (e.g. `"v2"`). Captions
+are keyed by `(sticker_id, model, prompt_version)`, and the `prompts` table pins
+each version to exactly one text — so re-running with an edited prompt under the
+old version is rejected at startup:
+
+```
+error: prompt version "v1" already exists with different text; bump the version when editing the prompt
+```
+
+After bumping, just re-run: the new version's rows are written next to the old
+ones (no `--force` needed — the new key doesn't exist yet), so you can diff
+prompt revisions the same way you diff models.
+
+### Inspecting captions
+
+Captions are keyed by `(sticker_id, model, prompt_version)`. Inspect them
+through subcommands — no SQL needed:
+
+```bash
+# counts per model + prompt version
+cargo run -p captioner -- stats
+
+# list captions (filterable: --pack, --model, --prompt-version, --limit)
+cargo run -p captioner -- list --pack crazy_klutzy --limit 5
+
+# search the scene and on-image text
+cargo run -p captioner -- search chicken
+
+# every caption for one sticker (all models / prompt versions)
+cargo run -p captioner -- show <sticker-uuid>
+
+# the registered prompt versions and their text
+cargo run -p captioner -- prompts
+```
+
+`stats` prints a count table; `list`/`search`/`show` print each caption with its
+pack, sticker UUID, model/version, scene, on-image text, tone, and situations.
+The UUIDs shown by `list`/`search` are what you pass to `show`.
+
+### Viewing captions next to the images
+
+To judge caption quality you need to see the thumbnail too. `gallery` writes a
+self-contained HTML page (thumbnails + caption fields) you open in a browser —
+the best way to eyeball results, especially OCR on memes:
+
+```bash
+# all captions → captions.html, then open it
+cargo run -p captioner -- gallery
+open captions.html            # macOS; or just open the file in any browser
+
+# same filters as `list`, plus --out and --images-dir
+cargo run -p captioner -- gallery --pack mne_pochuj --out ru.html
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--pack` / `--model` / `--prompt-version` / `--limit` | _none_ | Same filters as `list`. |
+| `--images-dir <dir>` | `stickers` | Root used to build the `<img>` paths. |
+| `--out <file>` | `captions.html` | Output HTML file. |
+
+The `<img>` paths are written relative to where you run the command, so open the
+generated file from the project root (next to `stickers/`).
+
+### Review server
+
+For interactive review — re-filtering without regenerating a file — `serve`
+runs a local web UI with a **pack** dropdown and a **date sort** (freshest
+first by default):
+
+```bash
+cargo run -p captioner -- serve            # http://localhost:8080
+cargo run -p captioner -- serve --port 9000
+```
+
+Then open `http://localhost:8080/` and use the dropdowns; the page reloads with
+the new filter/sort. The server reads the database live, so re-running a caption
+batch and refreshing the page shows the new captions. It binds to localhost only
+and serves thumbnails from `--images-dir` (default `stickers`).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port <n>` | `8080` | Port to listen on. |
+| `--images-dir <dir>` | `stickers` | Root for the served thumbnails. |
+
+## Running the embedder
+
+Embeds stored captions with a local text-embedding model (via Ollama) and writes
+the vectors to [Qdrant](https://qdrant.tech), one collection per
+`(caption_model, prompt_version, embed_model)` set.
+
+The embedded document is composed from the caption (`scene`, on-image text,
+`tone`, `situations`) plus two signals that ride alongside it: the sticker's
+sender-assigned **emoji** and its **pack** name/title. Changing this composition
+only affects newly written vectors — re-run with `--force` to refresh a
+collection embedded before the change.
+
+### Prerequisites
+
+- A running Ollama with an embedding model pulled (multilingual, incl. Russian):
+  ```bash
+  ollama pull bge-m3
+  ```
+- A running Qdrant:
+  ```bash
+  docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+    -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant
+  ```
+- Captions already produced by the captioner.
+
+### Running a batch
+
+```bash
+# embed every qwen3-vl:8b / v1 caption with bge-m3 (defaults)
+cargo run -p embedder
+
+# scope / cheap test run
+cargo run -p embedder -- --limit 10
+```
+
+```text
+done: embedded 243, skipped 0, failed 0 → collection stickers__qwen3-vl_32b__v1__bge-m3
+```
+
+**Idempotent.** Each point's id *is* the sticker UUID, so re-embedding a sticker
+overwrites that one point — re-running never creates duplicates. A sticker
+already present in the collection is skipped; `--force` re-embeds and overwrites
+it in place.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--caption-model <tag>` | `qwen3-vl:8b` | Which captions to embed (source set). |
+| `--prompt-version <v>` | `v1` | Prompt version of those captions. |
+| `--embed-model <tag>` | `bge-m3` | Ollama embedding model. |
+| `--dim <n>` | `1024` | Vector dimensionality; must match `--embed-model`. |
+| `--force` | off | Re-embed stickers already in the collection. |
+| `--limit <n>` | _none_ | Stop after N captions. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Caption database. |
+
+Swapping the embedding model is a `--embed-model`/`--dim` change: it writes a
+separate collection, so sets coexist for comparison (same as caption models).
+Inspect what's stored at the Qdrant dashboard: http://localhost:6333/dashboard.
+
+## Searching (the query server)
+
+`captioner vsearch` serves a browser UI for vector search. Needs the same Ollama
++ Qdrant the embedder used, plus `stickers/` and `meta.sqlite`.
+
+```bash
+cargo run -p captioner -- vsearch
+# open http://localhost:8090/ and search (Cyrillic works)
+```
+
+It embeds the query with the *same* model the captions used, searches the
+matching collection, and shows each hit's thumbnail, cosine score, and caption.
+The flags must name the same `(caption-model, prompt-version, embed-model)` the
+embedder wrote, or the collection won't resolve.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port <n>` | `8090` | Port to listen on. |
+| `--caption-model <tag>` | `qwen3-vl:8b` | Caption set (collection) to search. |
+| `--prompt-version <v>` | `v1` | Prompt version of that set. |
+| `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
+| `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |
+| `--limit <n>` | `10` | Results per query (UI `k` box overrides). |
+| `--min-score <f>` | _none_ | Drop hits below this cosine score (UI `min` overrides). |
+| `--images-dir <path>` | `stickers` | Thumbnails, served under `/images/`. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Sticker + caption database. |
+
+## Running the bot
+
+The live Telegram interface (`teloxide`). Two surfaces: **inline search** and
+**`/add`**. Needs the same Ollama + Qdrant the embedder used, plus `meta.sqlite`.
+
+```bash
+export TELEGRAM_BOT_TOKEN=<the same token you scraped with>
+cargo run -p bot
+```
+
+Two one-time setup steps in [@BotFather](https://t.me/BotFather):
+
+- **Enable inline mode** (`/setinline`, give it a placeholder like `search
+  stickers…`). Without this, Telegram never sends inline queries and search is
+  dead.
+- **Use the same bot that scraped the packs.** Inline results are
+  `InlineQueryResultCachedSticker`s referencing each sticker's `file_id`, which is
+  per-bot — a different token can't send them.
+
+**Search:** in any chat type `@your_bot some query` — ranked stickers appear as
+you type, embedded and searched through the same collection the embedder wrote.
+
+**Add a pack:** `/add <link or name>`, or just send the bot a sticker from the
+pack (it reads the pack name off the sticker). The bot can't see your installed
+packs — the Bot API has no such method — so you point it at the ones you want.
+`/add` only **queues** the pack (it doesn't run the minutes-long VLM/embed
+pipeline live). Process the queue with the full-cycle job, which drains the queue
+and runs scrape → caption → embed once, unloading each Ollama model before the
+next stage loads so the VLM and the embedder don't compete for VRAM:
+
+```bash
+export TELEGRAM_BOT_TOKEN=<the scraping bot's token>
+./pipeline.sh
+```
+
+It runs linearly and exits (no looping); any stage failing aborts the job.
+Override models/endpoints via env: `CAPTION_MODEL`, `EMBED_MODEL`, `OLLAMA_HOST`,
+`QDRANT_URL`. To run the stages by hand instead:
+
+```bash
+cargo run -p scrapper -- --from-queue      # drain queued packs into stickers/
+cargo run -p captioner                     # then caption + embed as usual
+cargo run -p embedder
+```
+
+Re-running `/add` (or `/add` on a pack already in the index) reports the pack's
+derived stage — `queued → scraped → captioned → ready`, with counts like
+"captioned 12/50" — computed on demand from the pipeline's own data.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--caption-model <tag>` | `qwen3-vl:8b` | Caption set (collection) to search. |
+| `--prompt-version <v>` | `v1` | Prompt version of that set. |
+| `--embed-model <tag>` | `bge-m3` | Embedding model — must match the embedder's. |
+| `--dim <n>` | `1024` | Vector dimensionality of `--embed-model`. |
+| `--limit <n>` | `30` | Max inline results per query (Telegram caps at 50). |
+| `--min-score <f>` | `0.44` | Drop hits below this cosine score; pass `0` to keep every hit. |
+| `--ollama-url <url>` | `$OLLAMA_HOST` or `http://localhost:11434` | Ollama base URL. |
+| `--qdrant-url <url>` | `http://localhost:6333` | Qdrant base URL. |
+| `--db <path>` | `stickers/meta.sqlite` | Sticker + caption database. |
+
+## Tests
+
+```bash
+cargo nextest run --workspace
+```

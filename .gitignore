@@ -8,3 +8,6 @@ docs/superpowers/
 /captions.html
 # local Qdrant data (vector store)
 /qdrant_storage
+# local tool caches
+/.serena
+/.claude

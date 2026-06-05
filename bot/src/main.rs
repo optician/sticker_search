@@ -31,6 +31,10 @@ const DEFAULT_CAPTION_MODEL: &str = "qwen3-vl:8b";
 const DEFAULT_PROMPT_VERSION: &str = "v1";
 const DEFAULT_EMBED_MODEL: &str = "bge-m3";
 const DEFAULT_DIM: usize = 1024;
+/// Cosine-score floor for inline results. Below this, hits are noise (the wrong
+/// sticker hurts more than no result), so the bot drops them. Override with
+/// `--min-score 0` to disable.
+const DEFAULT_MIN_SCORE: &str = "0.44";
 /// Telegram caps an inline answer at 50 results.
 const MAX_INLINE: usize = 50;
 /// Embedding a short query is quick; no need for the long caption-load timeout.
@@ -57,8 +61,9 @@ struct Cli {
     /// Max inline results per query (clamped to 50).
     #[arg(long, default_value_t = 30)]
     limit: usize,
-    /// Drop hits scoring below this cosine score.
-    #[arg(long)]
+    /// Drop hits scoring below this cosine score. Defaults to 0.44; pass 0 to
+    /// keep every hit.
+    #[arg(long, default_value = DEFAULT_MIN_SCORE)]
     min_score: Option<f32>,
     /// Ollama base URL. Falls back to $OLLAMA_HOST, then localhost.
     #[arg(long)]
