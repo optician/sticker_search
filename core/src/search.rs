@@ -9,6 +9,7 @@
 use crate::embed::collection_name;
 use crate::entities::{ScoredPoint, SearchHit};
 use crate::error::SearchError;
+use crate::normalize::Normalization;
 use crate::ports::{CaptionLookup, EmbeddingGateway, StickerRepository, VectorStore};
 
 /// One query's inputs. `caption_model` + `prompt_version` select which caption
@@ -30,6 +31,7 @@ pub struct SearchStickers<E, V, S, C> {
     store: V,
     stickers: S,
     captions: C,
+    normalization: Normalization,
 }
 
 impl<E, V, S, C> SearchStickers<E, V, S, C>
@@ -45,7 +47,16 @@ where
             store,
             stickers,
             captions,
+            normalization: Normalization::default(),
         }
+    }
+
+    /// Override text normalization (e.g. `Off` for embed models tolerant to
+    /// case/width/whitespace variance). Must match the setting the captions
+    /// were embedded with, or query and index normalize differently.
+    pub fn with_normalization(mut self, normalization: Normalization) -> Self {
+        self.normalization = normalization;
+        self
     }
 
     pub fn gateway(&self) -> &E {
@@ -62,7 +73,10 @@ where
     /// failing the whole query.
     pub async fn search(&self, q: SearchQuery<'_>) -> Result<Vec<SearchHit>, SearchError> {
         let collection = collection_name(q.caption_model, q.prompt_version, self.gateway.model());
-        let vector = self.gateway.embed(q.text).await?;
+        let vector = self
+            .gateway
+            .embed(&self.normalization.apply(q.text))
+            .await?;
         let hits = self
             .store
             .search(&collection, &vector, q.limit, q.min_score)
@@ -140,6 +154,8 @@ mod tests {
         dim: usize,
         /// Text the gateway should fail on (simulates a model/transport error).
         fail: Option<String>,
+        /// Last text `embed` was called with.
+        seen: RefCell<Option<String>>,
     }
 
     impl FakeGateway {
@@ -148,7 +164,11 @@ mod tests {
                 model: model.into(),
                 dim: 4,
                 fail: None,
+                seen: RefCell::new(None),
             }
+        }
+        fn seen(&self) -> Option<String> {
+            self.seen.borrow().clone()
         }
     }
 
@@ -160,6 +180,7 @@ mod tests {
             self.dim
         }
         async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingGatewayError> {
+            *self.seen.borrow_mut() = Some(text.into());
             if self.fail.as_deref() == Some(text) {
                 return Err(EmbeddingGatewayError::Transport("boom".into()));
             }
@@ -288,6 +309,35 @@ mod tests {
     }
 
     // ---- tests ----
+
+    #[tokio::test]
+    async fn query_text_is_normalized_by_default() {
+        let app = app(
+            FakeGateway::new("bge-m3"),
+            FakeStore::default(),
+            FakeStickers::default(),
+            FakeCaptions::default(),
+        );
+
+        app.search(query("  ЗАПАХЛО \t Cat ")).await.unwrap();
+
+        assert_eq!(app.gateway().seen().as_deref(), Some("запахло cat"));
+    }
+
+    #[tokio::test]
+    async fn normalization_off_embeds_raw_query() {
+        let app = app(
+            FakeGateway::new("bge-m3"),
+            FakeStore::default(),
+            FakeStickers::default(),
+            FakeCaptions::default(),
+        )
+        .with_normalization(Normalization::Off);
+
+        app.search(query("  ЗАПАХЛО \t Cat ")).await.unwrap();
+
+        assert_eq!(app.gateway().seen().as_deref(), Some("  ЗАПАХЛО \t Cat "));
+    }
 
     #[tokio::test]
     async fn resolves_hits_in_rank_order_with_sticker_and_caption() {

@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 use sticker_core::error::{EmbedError, EmbeddingGatewayError, RepoError, VectorStoreError};
 use sticker_core::{
-    EmbedCaptions, EmbedEvent, EmbedProgress, EmbedRun, EmbedSummary, collection_name,
+    EmbedCaptions, EmbedEvent, EmbedProgress, EmbedRun, EmbedSummary, Normalization,
+    collection_name,
 };
 use sticker_infra::{OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository};
 use thiserror::Error;
@@ -48,6 +49,11 @@ struct RunArgs {
     /// Vector dimensionality the model emits (must match `--embed-model`).
     #[arg(long, default_value_t = DEFAULT_DIM)]
     dim: usize,
+    /// Skip text normalization (NFKC + lowercase + whitespace collapse) before
+    /// embedding. Only for embed models tolerant to such variance — the search
+    /// side must use the same setting.
+    #[arg(long)]
+    no_normalize: bool,
     /// Re-embed stickers whose vector already exists in the collection.
     #[arg(long)]
     force: bool,
@@ -99,7 +105,14 @@ async fn cmd_run(db: &std::path::Path, args: RunArgs) -> Result<(), AppError> {
     let repo = SqliteRepository::open(db)?;
     let store = QdrantVectorStore::new(&args.qdrant_url, REQUEST_TIMEOUT)?;
 
-    let app = EmbedCaptions::new(gateway, repo, store).on_progress(print_progress);
+    let normalization = if args.no_normalize {
+        Normalization::Off
+    } else {
+        Normalization::default()
+    };
+    let app = EmbedCaptions::new(gateway, repo, store)
+        .on_progress(print_progress)
+        .with_normalization(normalization);
     let collection = collection_name(&args.caption_model, &args.prompt_version, &args.embed_model);
 
     tracing::info!(

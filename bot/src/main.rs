@@ -18,7 +18,9 @@ use sticker_core::error::{
     EmbeddingGatewayError, GatewayError, PackStatusError, RepoError, SearchError, VectorStoreError,
 };
 use sticker_core::ports::{PackRequests, TelegramGateway};
-use sticker_core::{PackStatus, SearchHit, SearchQuery, SearchStickers, normalize_pack_name};
+use sticker_core::{
+    Normalization, PackStatus, SearchHit, SearchQuery, SearchStickers, normalize_pack_name,
+};
 use sticker_infra::{BotApiGateway, OllamaEmbeddingGateway, QdrantVectorStore, SqliteRepository};
 use teloxide::prelude::*;
 use teloxide::types::{FileId, InlineQueryResult, InlineQueryResultCachedSticker};
@@ -65,6 +67,10 @@ struct Cli {
     /// keep every hit.
     #[arg(long, default_value = DEFAULT_MIN_SCORE)]
     min_score: Option<f32>,
+    /// Skip query-text normalization (NFKC + lowercase + whitespace collapse)
+    /// before embedding — must match the setting the embedder ran with.
+    #[arg(long)]
+    no_normalize: bool,
     /// Ollama base URL. Falls back to $OLLAMA_HOST, then localhost.
     #[arg(long)]
     ollama_url: Option<String>,
@@ -86,6 +92,7 @@ struct BotConfig {
     dim: usize,
     limit: usize,
     min_score: Option<f32>,
+    normalization: Normalization,
     ollama_url: String,
     qdrant_url: String,
 }
@@ -127,7 +134,8 @@ async fn search(cfg: &BotConfig, text: &str) -> Result<Vec<SearchHit>, AppError>
         vector_store(cfg)?,
         open_repo(cfg)?,
         open_repo(cfg)?,
-    );
+    )
+    .with_normalization(cfg.normalization);
     let q = SearchQuery {
         text,
         caption_model: &cfg.caption_model,
@@ -294,6 +302,11 @@ async fn run() -> Result<(), AppError> {
         dim: cli.dim,
         limit: cli.limit.clamp(1, MAX_INLINE),
         min_score: cli.min_score,
+        normalization: if cli.no_normalize {
+            Normalization::Off
+        } else {
+            Normalization::default()
+        },
         ollama_url,
         qdrant_url: cli.qdrant_url,
     });
