@@ -4,6 +4,7 @@
 
 use crate::entities::{DistanceMetric, EmbedDoc, VectorPayload, VectorPoint};
 use crate::error::{EmbedError, EmbedStickerError};
+use crate::normalize::Normalization;
 use crate::ports::{CaptionReader, EmbeddingGateway, VectorStore};
 use uuid::Uuid;
 
@@ -79,6 +80,7 @@ pub struct EmbedCaptions<G, R, V> {
     captions: R,
     store: V,
     report: fn(EmbedProgress),
+    normalization: Normalization,
 }
 
 impl<G, R, V> EmbedCaptions<G, R, V>
@@ -93,11 +95,19 @@ where
             captions,
             store,
             report: ignore_progress,
+            normalization: Normalization::default(),
         }
     }
 
     pub fn on_progress(mut self, report: fn(EmbedProgress)) -> Self {
         self.report = report;
+        self
+    }
+
+    /// Override text normalization (e.g. `Off` for embed models tolerant to
+    /// case/width/whitespace variance).
+    pub fn with_normalization(mut self, normalization: Normalization) -> Self {
+        self.normalization = normalization;
         self
     }
 
@@ -165,7 +175,10 @@ where
             return Ok(Outcome::Skipped);
         }
 
-        let vector = self.gateway.embed(&doc.embed_text()).await?;
+        let vector = self
+            .gateway
+            .embed(&self.normalization.apply(&doc.embed_text()))
+            .await?;
         let expected = self.gateway.dim();
         if vector.len() != expected {
             return Err(EmbedStickerError::DimensionMismatch {
@@ -235,6 +248,7 @@ mod tests {
         bad_len: Option<usize>,
         fail_on: RefCell<HashSet<String>>,
         calls: Cell<u32>,
+        seen: RefCell<Vec<String>>,
     }
 
     impl FakeGateway {
@@ -245,6 +259,7 @@ mod tests {
                 bad_len: None,
                 fail_on: RefCell::new(HashSet::new()),
                 calls: Cell::new(0),
+                seen: RefCell::new(Vec::new()),
             }
         }
         fn fail_on_text(self, text: &str) -> Self {
@@ -253,6 +268,10 @@ mod tests {
         }
         fn calls(&self) -> u32 {
             self.calls.get()
+        }
+        /// Texts `embed` was called with, in order.
+        fn seen(&self) -> Vec<String> {
+            self.seen.borrow().clone()
         }
     }
 
@@ -265,6 +284,7 @@ mod tests {
         }
         async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingGatewayError> {
             self.calls.set(self.calls.get() + 1);
+            self.seen.borrow_mut().push(text.into());
             if self.fail_on.borrow().contains(text) {
                 return Err(EmbeddingGatewayError::Transport("boom".into()));
             }
@@ -416,6 +436,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embed_text_is_normalized_by_default() {
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![caption(Uuid::new_v4(), "qwen", "v1", "A  Cat\nIN ЗАПАХЛО")],
+            FakeStore::default(),
+        );
+
+        app.run(run_cfg()).await.unwrap();
+
+        assert_eq!(
+            app.gateway().seen(),
+            vec!["a cat in запахло. tone: neutral. pack: pack title (packname)"],
+        );
+    }
+
+    #[tokio::test]
+    async fn normalization_off_embeds_raw_text() {
+        let doc = caption(Uuid::new_v4(), "qwen", "v1", "A  Cat");
+        let raw = doc.embed_text();
+        let app = app(
+            FakeGateway::new("bge-m3", 4),
+            vec![doc],
+            FakeStore::default(),
+        )
+        .with_normalization(Normalization::Off);
+
+        app.run(run_cfg()).await.unwrap();
+
+        assert_eq!(app.gateway().seen(), vec![raw]);
+    }
+
+    #[tokio::test]
     async fn existing_vector_is_skipped_without_embedding() {
         let id = Uuid::new_v4();
         let coll = collection_name("qwen", "v1", "bge-m3");
@@ -517,7 +569,9 @@ mod tests {
     async fn one_failing_embed_does_not_abort_the_run() {
         let good = caption(Uuid::new_v4(), "qwen", "v1", "good");
         let bad = caption(Uuid::new_v4(), "qwen", "v1", "bad");
-        let gw = FakeGateway::new("bge-m3", 4).fail_on_text(&bad.embed_text());
+        // The gateway sees normalized text, so the failure must match that form.
+        let gw = FakeGateway::new("bge-m3", 4)
+            .fail_on_text(&crate::normalize_for_embedding(&bad.embed_text()));
         let app = app(gw, vec![good, bad], FakeStore::default());
 
         let summary = app.run(run_cfg()).await.unwrap();

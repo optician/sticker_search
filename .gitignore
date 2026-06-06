@@ -1,13 +1,30 @@
 /target
 
-# superpowers slop — never track
-docs/superpowers/
 /stickers
 /packs.txt
 # generated caption gallery
 /captions.html
 # local Qdrant data (vector store)
 /qdrant_storage
-# local tool caches
-/.serena
-/.claude
+# local-only plugin/tool state — never track
+# serena (project memories, caches)
+.serena/
+# claude code (settings, plugin state)
+.claude/
+# superpowers plugin artifacts (plans, scratch docs)
+docs/superpowers/
+docs/plans/
+
+# OS files
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+Desktop.ini
+
+# editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

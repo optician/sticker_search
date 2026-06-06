@@ -11,8 +11,8 @@ use sticker_core::error::{
     VectorStoreError,
 };
 use sticker_core::{
-    CaptionProgress, CaptionRun, CaptionStickers, CaptionSummary, ProgressEvent, Prompt, SearchHit,
-    SearchQuery, SearchStickers, collection_name,
+    CaptionProgress, CaptionRun, CaptionStickers, CaptionSummary, Normalization, ProgressEvent,
+    Prompt, SearchHit, SearchQuery, SearchStickers, collection_name,
 };
 use sticker_infra::{
     CaptionFilter, CaptionSort, CaptionView, FsImageStore, OllamaCaptionGateway,
@@ -202,6 +202,10 @@ struct VsearchArgs {
     /// Drop hits scoring below this cosine score (the UI can override via `min`).
     #[arg(long)]
     min_score: Option<f32>,
+    /// Skip query-text normalization (NFKC + lowercase + whitespace collapse)
+    /// before embedding — must match the setting the embedder ran with.
+    #[arg(long)]
+    no_normalize: bool,
     /// Ollama base URL. Falls back to $OLLAMA_HOST, then localhost.
     #[arg(long)]
     ollama_url: Option<String>,
@@ -656,7 +660,13 @@ async fn cmd_vsearch(db: &Path, args: VsearchArgs) -> Result<(), AppError> {
 
     let gateway = OllamaEmbeddingGateway::new(&url, &args.embed_model, args.dim, EMBED_TIMEOUT)?;
     let store = QdrantVectorStore::new(&args.qdrant_url, EMBED_TIMEOUT)?;
-    let app = SearchStickers::new(gateway, store, open_db(db)?, open_db(db)?);
+    let normalization = if args.no_normalize {
+        Normalization::Off
+    } else {
+        Normalization::default()
+    };
+    let app = SearchStickers::new(gateway, store, open_db(db)?, open_db(db)?)
+        .with_normalization(normalization);
 
     let collection = collection_name(&args.caption_model, &args.prompt_version, &args.embed_model);
     let addr = format!("127.0.0.1:{}", args.port);

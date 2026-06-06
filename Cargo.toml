@@ -9,6 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 time = { version = "0.3", features = ["serde-well-known", "formatting", "parsing", "macros"] }
+unicode-normalization = "0.1"
 # async / io
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

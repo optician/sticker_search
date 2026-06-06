@@ -8,6 +8,7 @@ pub mod caption;
 pub mod embed;
 pub mod entities;
 pub mod error;
+pub mod normalize;
 pub mod pack;
 pub mod ports;
 pub mod scrape;
@@ -27,6 +28,7 @@ pub use error::{
     EmbeddingGatewayError, GatewayError, PackStatusError, RepoError, ScrapeError, SearchError,
     StoreError, VectorStoreError,
 };
+pub use normalize::{Normalization, normalize_for_embedding};
 pub use pack::{PackStatus, normalize_pack_name};
 pub use ports::{
     CaptionGateway, CaptionLookup, CaptionReader, CaptionRepository, EmbeddingGateway, ImageStore,
